@@ -54,7 +54,12 @@
                   <%== csrf_input_tag %>
                   <input type="hidden" name="operation" value="enable">
                   <div class="col">
-                    <input type="text" name="value" placeholder="<%= Flipper::UI.configuration.add_actor_placeholder %>" class="form-control">
+                    <input type="text" name="value" placeholder="<%= Flipper::UI.configuration.add_actor_placeholder %>" class="form-control" list="actors-list">
+                    <datalist id="actors-list">
+                      <% @feature.actor_names.each_pair do |value, name| %>
+                        <option value="<%= value %>"><%= name %></option>
+                      <% end %>
+                    </datalist>
                   </div>
                   <div class="col-auto">
                     <input type="submit" value="Add Actor" class="btn btn-primary">
