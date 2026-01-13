@@ -15,6 +15,10 @@ module Flipper
         @remote = remote
       end
 
+      def adapter_stack
+        "#{name}(local: #{@local.adapter_stack}, remote: #{@remote.adapter_stack})"
+      end
+
       def features
         @local.features
       end
@@ -27,8 +31,8 @@ module Flipper
         @local.get_multi(features)
       end
 
-      def get_all
-        @local.get_all
+      def get_all(**kwargs)
+        @local.get_all(**kwargs)
       end
 
       def add(feature)

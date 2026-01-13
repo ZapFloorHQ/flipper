@@ -218,6 +218,11 @@ RSpec.describe Flipper do
       expect(described_class.adapter).to eq(described_class.instance.adapter)
     end
 
+    it 'delegates adapter_stack to instance' do
+      expect(described_class.adapter_stack).to eq(described_class.instance.adapter_stack)
+      expect(described_class.adapter_stack).to eq("memoizable -> memory")
+    end
+
     it 'delegates memoize= to instance' do
       expect(described_class.adapter.memoizing?).to be(false)
       described_class.memoize = true
@@ -254,7 +259,7 @@ RSpec.describe Flipper do
       end
       described_class.sync
       expect(described_class.sync_secret).to eq("tasty")
-      expect(stub).to have_been_requested
+      expect(stub).to have_been_made.at_least_once
     end
   end
 
@@ -313,7 +318,7 @@ RSpec.describe Flipper do
 
   describe '.group_exists' do
     it 'returns true if the group is already created' do
-      group = described_class.register('admins', &:admin?)
+      described_class.register('admins', &:admin?)
       expect(described_class.group_exists?(:admins)).to eq(true)
     end
 

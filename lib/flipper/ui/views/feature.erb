@@ -50,7 +50,7 @@
                 <button class="btn btn-outline-secondary js-toggle-trigger" data-bs-toggle="collapse" data-bs-target="#add-actor">Add an actor</button>
               </div>
               <div class="col toggle-block-when-on">
-                <form action="<%= script_name %>/features/<%= @feature.key %>/actors" method="post" class="row">
+                <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/actors" method="post" class="row">
                   <%== csrf_input_tag %>
                   <input type="hidden" name="operation" value="enable">
                   <div class="col">
@@ -88,7 +88,7 @@
               </div>
               <div class="col col-auto">
                 <% if write_allowed? %>
-                  <form action="<%= script_name %>/features/<%= @feature.key %>/actors" method="post">
+                  <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/actors" method="post">
                     <%== csrf_input_tag %>
                     <input type="hidden" name="operation" value="disable">
                     <input type="hidden" name="value" value="<%= item %>">
@@ -124,13 +124,13 @@
                 <% if @feature.disabled_groups.empty? %>
                   All groups enabled.
                 <% else %>
-                  <form action="<%= script_name %>/features/<%= @feature.key %>/groups" method="post" class="row">
+                  <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/groups" method="post" class="row">
                     <%== csrf_input_tag %>
                     <input type="hidden" name="operation" value="enable">
                     <div class="col">
                       <select name="value" class="form-select">
                         <option value="">Select a group...</option>
-                        <% @feature.disabled_groups.each do |group| %>
+                        <% @feature.disabled_groups.sort_by(&:name).each do |group| %>
                           <option value="<%= group.name %>"><%= group.name %></option>
                         <% end %>
                       </select>
@@ -155,7 +155,7 @@
               </div>
               <div class="col col-auto">
                 <% if write_allowed? %>
-                  <form action="<%= script_name %>/features/<%= @feature.key %>/groups" method="post">
+                  <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/groups" method="post">
                     <%== csrf_input_tag %>
                     <input type="hidden" name="operation" value="disable">
                     <input type="hidden" name="value" value="<%= item %>">
@@ -190,7 +190,7 @@
           <% if write_allowed? %>
             <div class="card-body border-bottom toggle-block-when-on bg-lightest">
               <div class="row align-items-center">
-                <form action="<%= script_name %>/features/<%= @feature.key %>/percentage_of_actors" method="post" class="col">
+                <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/percentage_of_actors" method="post" class="col">
                   <%== csrf_input_tag %>
                   <div class="btn-group">
                     <% @percentages.each do |number| %>
@@ -198,7 +198,7 @@
                     <% end %>
                   </div>
                 </form>
-                <form action="<%= script_name %>/features/<%= @feature.key %>/percentage_of_actors" method="post" class="col-auto row">
+                <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/percentage_of_actors" method="post" class="col-auto row">
                   <%== csrf_input_tag %>
                   <div class="col-auto">
                     <input style="width:5em;" type="number" max="100" min="0" name="value" <% if @feature.percentage_of_actors_value > 0 %>value="<%= @feature.percentage_of_actors_value %>"<% end %> title="Custom percentage (26, 32, etc.)" placeholder="0" class="form-control">
@@ -231,7 +231,7 @@
           <% if write_allowed? %>
             <div class="card-body border-bottom toggle-block-when-on bg-lightest">
               <div class="row align-items-center">
-                <form action="<%= script_name %>/features/<%= @feature.key %>/percentage_of_time" method="post" class="col">
+                <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/percentage_of_time" method="post" class="col">
                   <%== csrf_input_tag %>
                   <div class="btn-group">
                     <% @percentages.each do |number| %>
@@ -239,7 +239,7 @@
                     <% end %>
                   </div>
                 </form>
-                <form action="<%= script_name %>/features/<%= @feature.key %>/percentage_of_time" method="post" class="col-auto row">
+                <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/percentage_of_time" method="post" class="col-auto row">
                   <%== csrf_input_tag %>
                   <div class="col-auto">
                     <input style="width:5em;" type="number" max="100" min="0" name="value" <% if @feature.percentage_of_time_value > 0 %>value="<%= @feature.percentage_of_time_value %>"<% end %> title="Custom percentage (26, 32, etc.)" placeholder="0" class="form-control">
@@ -254,20 +254,19 @@
 
       <% if write_allowed? %>
         <div class="card-body">
-          <form action="<%= script_name %>/features/<%= @feature.key %>/boolean" method="post">
+          <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>/boolean" method="post">
             <%== csrf_input_tag %>
 
             <div class="row">
               <% unless @feature.boolean_value %>
                 <div class="col d-grid">
-                  <button type="submit" name="action" value="Enable" class="btn btn-outline-success">
-                    <span class="d-block" data-bs-toggle="tooltip"
-                      <% if Flipper::UI.configuration.confirm_fully_enable %>
-                        data-confirmation-prompt="Are you sure you want to fully enable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
-                        data-confirmation-text="<%= feature_name %>"
-                      <% end %>
-                        title="Enable for everyone"
-                      >
+                  <button type="submit" name="action" value="Enable" class="btn btn-outline-success"
+                    <% if Flipper::UI.configuration.confirm_fully_enable %>
+                      data-confirmation-prompt="Are you sure you want to fully enable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
+                      data-confirmation-text="<%= feature_name %>"
+                    <% end %>
+                  >
+                    <span class="d-block" data-bs-toggle="tooltip" title="Enable for everyone">
                       Fully Enable
                     </span>
                   </button>
@@ -276,14 +275,13 @@
 
               <% unless @feature.off? %>
                 <div class="col d-grid">
-                  <button type="submit" name="action" value="Disable" class="btn btn-outline-danger">
-                    <span class="d-block" data-bs-toggle="tooltip"
-                      <% if Flipper::UI.configuration.confirm_disable %>
-                        data-confirmation-prompt="Are you sure you want to disable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
-                        data-confirmation-text="<%= feature_name %>"
-                      <% end %>
-                        title="Disable for everyone by clearing all percentages, groups and actors."
-                      >
+                  <button type="submit" name="action" value="Disable" class="btn btn-outline-danger"
+                    <% if Flipper::UI.configuration.confirm_disable %>
+                      data-confirmation-prompt="Are you sure you want to disable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
+                      data-confirmation-text="<%= feature_name %>"
+                    <% end %>
+                  >
+                    <span class="d-block" data-bs-toggle="tooltip" title="Disable for everyone by clearing all percentages, groups and actors.">
                       Disable
                     </span>
                   </button>
@@ -306,7 +304,7 @@
           <p>
             <%= Flipper::UI.configuration.delete.description %>
           </p>
-          <form action="<%= script_name %>/features/<%= @feature.key %>" method="post">
+          <form action="<%= script_name %>/features/<%= Flipper::UI::Util.escape @feature.key %>" method="post">
             <%== csrf_input_tag %>
             <input type="hidden" id="feature_name" name="_feature" value="<%= feature_name %>">
             <input type="hidden" name="_method" value="DELETE">

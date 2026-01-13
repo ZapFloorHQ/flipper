@@ -10,7 +10,7 @@ rspec_options = {
   all_after_pass: false,
   all_on_start: false,
   failed_mode: :keep,
-  cmd: 'bundle exec rspec',
+  cmd: 'bundle exec ruby -w $(which rspec)',
 }
 
 guard 'rspec', rspec_options do
@@ -27,6 +27,13 @@ guard 'rspec', rspec_options do
       'spec/flipper/adapters/redis_cache_spec.rb',
       'spec/flipper/adapters/dalli_cache_spec.rb',
       'spec/flipper/adapters/active_support_cache_store_spec.rb',
+    ]
+  }
+  watch('lib/flipper/adapters/redis_shared/methods.rb') {
+    [
+      'spec/flipper/adapters/redis_spec.rb',
+      'spec/flipper/adapters/redis_cache_spec.rb',
+      'spec/flipper/adapters/redis_connection_pool_spec.rb',
     ]
   }
 

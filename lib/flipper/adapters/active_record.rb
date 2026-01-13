@@ -2,46 +2,17 @@ require 'set'
 require 'securerandom'
 require 'flipper'
 require 'active_record'
+require_relative 'active_record/model'
+require_relative 'active_record/feature'
+require_relative 'active_record/gate'
 
 module Flipper
   module Adapters
     class ActiveRecord
       include ::Flipper::Adapter
 
-      ActiveSupport.on_load(:active_record) do
-        # Abstract base class for internal models
-        class Model < ::ActiveRecord::Base
-          self.abstract_class = true
-        end
-
-        # Private: Do not use outside of this adapter.
-        class Feature < Model
-          self.table_name = [
-            Model.table_name_prefix,
-            "flipper_features",
-            Model.table_name_suffix,
-          ].join
-
-          has_many :gates, foreign_key: "feature_key", primary_key: "key"
-
-          validates :key, presence: true
-        end
-
-        # Private: Do not use outside of this adapter.
-        class Gate < Model
-          self.table_name = [
-            Model.table_name_prefix,
-            "flipper_gates",
-            Model.table_name_suffix,
-          ].join
-
-          validates :feature_key, presence: true
-          validates :key, presence: true
-        end
-      end
-
       VALUE_TO_TEXT_WARNING = <<-EOS
-        Your database needs migrated to use the latest Flipper features.
+        Your database needs to be migrated to use the latest Flipper features.
         Run `rails generate flipper:update` and `rails db:migrate`.
       EOS
 
@@ -59,10 +30,8 @@ module Flipper
       # can roll your own tables and what not, if you so desire.
       def initialize(options = {})
         @name = options.fetch(:name, :active_record)
-        @feature_class = options.fetch(:feature_class) { Feature }
-        @gate_class = options.fetch(:gate_class) { Gate }
-
-        warn VALUE_TO_TEXT_WARNING if value_not_text?
+        @feature_class = options.fetch(:feature_class) { Flipper::Adapters::ActiveRecord::Feature }
+        @gate_class = options.fetch(:gate_class) { Flipper::Adapters::ActiveRecord::Gate }
       end
 
       # Public: The set of known features.
@@ -72,7 +41,7 @@ module Flipper
 
       # Public: Adds a feature to the set of known features.
       def add(feature)
-        with_connection(@feature_class) do
+        with_write_connection(@feature_class) do
           @feature_class.transaction(requires_new: true) do
             begin
               # race condition, but add is only used by enable/disable which happen
@@ -91,7 +60,7 @@ module Flipper
 
       # Public: Removes a feature from the set of known features.
       def remove(feature)
-        with_connection(@feature_class) do
+        with_write_connection(@feature_class) do
           @feature_class.transaction do
             @feature_class.where(key: feature.key).destroy_all
             clear(feature)
@@ -102,7 +71,7 @@ module Flipper
 
       # Public: Clears the gate values for a feature.
       def clear(feature)
-        with_connection(@gate_class) { @gate_class.where(feature_key: feature.key).destroy_all }
+        with_write_connection(@gate_class) { @gate_class.where(feature_key: feature.key).destroy_all }
         true
       end
 
@@ -131,7 +100,7 @@ module Flipper
         end
       end
 
-      def get_all
+      def get_all(**kwargs)
         with_connection(@feature_class) do |connection|
           # query the gates from the db in a single query
           features = ::Arel::Table.new(@feature_class.table_name.to_sym)
@@ -196,9 +165,11 @@ module Flipper
         when :integer
           set(feature, gate, thing)
         when :json
-          delete(feature, gate)
+          with_write_connection(@gate_class) do
+            delete(feature, gate)
+          end
         when :set
-          with_connection(@gate_class) do
+          with_write_connection(@gate_class) do
             @gate_class.where(feature_key: feature.key, key: gate.key, value: thing.value).destroy_all
           end
         else
@@ -221,7 +192,7 @@ module Flipper
 
         raise VALUE_TO_TEXT_WARNING if json_feature && value_not_text?
 
-        with_connection(@gate_class) do
+        with_write_connection(@gate_class) do
           @gate_class.transaction(requires_new: true) do
             clear(feature) if clear_feature
             delete(feature, gate)
@@ -246,7 +217,7 @@ module Flipper
       end
 
       def enable_multi(feature, gate, thing)
-        with_connection(@gate_class) do |connection|
+        with_write_connection(@gate_class) do |connection|
           begin
             connection.transaction(requires_new: true) do
               @gate_class.create! do |g|
@@ -289,14 +260,42 @@ module Flipper
       # Check if value column is text instead of string
       # See https://github.com/flippercloud/flipper/pull/692
       def value_not_text?
-        @gate_class.column_for_attribute(:value).type != :text
+        with_connection(@gate_class) do |connection|
+          @gate_class.column_for_attribute(:value).type != :text
+        end
       rescue ::ActiveRecord::ActiveRecordError => error
         # If the table doesn't exist, the column doesn't exist either
         warn "#{error.message}. You likely need to run `rails g flipper:active_record` and/or `rails db:migrate`."
       end
 
       def with_connection(model = @feature_class, &block)
+        warn VALUE_TO_TEXT_WARNING if !warned_about_value_not_text? && value_not_text?
         model.connection_pool.with_connection(&block)
+      end
+
+      def with_write_connection(model = @feature_class, &block)
+        # Use Rails' built-in method to find the class that controls the connection
+        # This walks up the inheritance chain to find which class called connects_to
+        if model.respond_to?(:connection_class_for_self)
+          connection_class = model.connection_class_for_self
+
+          # Only use connected_to if this class actually has connects_to configured
+          # connection_class? returns true when connects_to was called on the class
+          if connection_class.respond_to?(:connection_class?) && connection_class.connection_class?
+            connection_class.connected_to(role: :writing) do
+              with_connection(model, &block)
+            end
+          else
+            with_connection(model, &block)
+          end
+        else
+          with_connection(model, &block)
+        end
+      end
+
+      def warned_about_value_not_text?
+        return @warned_about_value_not_text if defined?(@warned_about_value_not_text)
+        @warned_about_value_not_text = true
       end
     end
   end

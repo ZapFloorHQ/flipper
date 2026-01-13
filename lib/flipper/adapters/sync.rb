@@ -9,7 +9,7 @@ module Flipper
       include ::Flipper::Adapter
 
       # Public: The synchronizer that will keep the local and remote in sync.
-      attr_reader :synchronizer
+      attr_reader :synchronizer, :local, :remote
 
       # Public: Build a new sync instance.
       #
@@ -33,6 +33,10 @@ module Flipper
         synchronize
       end
 
+      def adapter_stack
+        "#{name}(local: #{@local.adapter_stack}, remote: #{@remote.adapter_stack})"
+      end
+
       def features
         synchronize
         @local.features
@@ -48,9 +52,9 @@ module Flipper
         @local.get_multi(features)
       end
 
-      def get_all
+      def get_all(**kwargs)
         synchronize
-        @local.get_all
+        @local.get_all(**kwargs)
       end
 
       def add(feature)

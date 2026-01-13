@@ -80,7 +80,7 @@ RSpec.describe Flipper::Middleware::Memoizer do
   context 'with preload: true' do
     let(:app) do
       # ensure scoped for builder block, annoying...
-      instance = flipper
+      flipper
       middleware = described_class
 
       Rack::Builder.new do
@@ -141,7 +141,7 @@ RSpec.describe Flipper::Middleware::Memoizer do
   context 'with preload specific' do
     let(:app) do
       # ensure scoped for builder block, annoying...
-      instance = flipper
+      flipper
       middleware = described_class
 
       Rack::Builder.new do
@@ -266,7 +266,7 @@ RSpec.describe Flipper::Middleware::Memoizer do
   context 'with multiple instances' do
     let(:app) do
       # ensure scoped for builder block, annoying...
-      instance = flipper
+      flipper
       middleware = described_class
 
       Rack::Builder.new do
@@ -316,7 +316,7 @@ RSpec.describe Flipper::Middleware::Memoizer do
   context 'with flipper setup in env' do
     let(:app) do
       # ensure scoped for builder block, annoying...
-      instance = flipper
+      flipper
       middleware = described_class
 
       Rack::Builder.new do
@@ -460,7 +460,6 @@ RSpec.describe Flipper::Middleware::Memoizer do
       cache.clear
       cached = Flipper::Adapters::ActiveSupportCacheStore.new(logged_memory, cache)
       logged_cached = Flipper::Adapters::OperationLogger.new(cached)
-      memo = {}
       flipper = Flipper.new(logged_cached)
       flipper[:stats].enable
       flipper[:shiny].enable
@@ -471,18 +470,15 @@ RSpec.describe Flipper::Middleware::Memoizer do
 
       get '/', {}, 'flipper' => flipper
       expect(logged_cached.count(:get_all)).to be(1)
-      expect(logged_memory.count(:features)).to be(1)
-      expect(logged_memory.count(:get_multi)).to be(1)
+      expect(logged_memory.count(:get_all)).to be(1)
 
       get '/', {}, 'flipper' => flipper
       expect(logged_cached.count(:get_all)).to be(2)
-      expect(logged_memory.count(:features)).to be(1)
-      expect(logged_memory.count(:get_multi)).to be(1)
+      expect(logged_memory.count(:get_all)).to be(1)
 
       get '/', {}, 'flipper' => flipper
       expect(logged_cached.count(:get_all)).to be(3)
-      expect(logged_memory.count(:features)).to be(1)
-      expect(logged_memory.count(:get_multi)).to be(1)
+      expect(logged_memory.count(:get_all)).to be(1)
     end
   end
 end

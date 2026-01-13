@@ -22,6 +22,10 @@ module Flipper
                              write_timeout: options[:write_timeout],
                              max_retries: options[:max_retries],
                              debug_output: options[:debug_output])
+        @last_get_all_etag = nil
+        @last_get_all_result = nil
+        @last_get_all_response = nil
+        @get_all_mutex = Mutex.new
       end
 
       def get(feature)
@@ -55,12 +59,33 @@ module Flipper
         result
       end
 
-      def get_all
-        response = @client.get("/features?exclude_gate_names=true")
+      def get_all(cache_bust: false)
+        options = {}
+        path = "/features?exclude_gate_names=true"
+        path += "&_cb=#{Time.now.to_i}" if cache_bust
+        etag = @get_all_mutex.synchronize { @last_get_all_etag }
+
+        if etag
+          options[:headers] = { if_none_match: etag }
+        end
+
+        response = @client.get(path, options)
+        @get_all_mutex.synchronize { @last_get_all_response = response }
+
+        if response.is_a?(Net::HTTPNotModified)
+          cached_result = @get_all_mutex.synchronize { @last_get_all_result }
+
+          if cached_result
+            return cached_result
+          else
+            raise Error, response
+          end
+        end
+
         raise Error, response unless response.is_a?(Net::HTTPOK)
 
-        parsed_response = Typecast.from_json(response.body)
-        parsed_features = parsed_response.fetch('features')
+        parsed_response = response.body.empty? ? {} : Typecast.from_json(response.body)
+        parsed_features = parsed_response['features'] || []
         gates_by_key = parsed_features.each_with_object({}) do |parsed_feature, hash|
           hash[parsed_feature['key']] = parsed_feature['gates']
           hash
@@ -71,7 +96,17 @@ module Flipper
           feature = Feature.new(key, self)
           result[feature.key] = result_for_feature(feature, gates_by_key[feature.key])
         end
+
+        @get_all_mutex.synchronize do
+          @last_get_all_etag = response['etag'] if response['etag']
+          @last_get_all_result = result
+        end
+
         result
+      end
+
+      def last_get_all_response
+        @get_all_mutex.synchronize { @last_get_all_response }
       end
 
       def features

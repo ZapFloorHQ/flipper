@@ -76,6 +76,26 @@ RSpec.describe Flipper::Feature do
         expect(subject.enabled?(actors)).to be(false)
       end
     end
+
+    context "for an object that implements .nil? == true" do
+      let(:actor) { Flipper::Actor.new("User;1") }
+
+      before do
+        def actor.nil?
+          true
+        end
+      end
+
+      it 'returns true if feature is enabled' do
+        subject.enable
+        expect(subject.enabled?(actor)).to be(true)
+      end
+
+      it 'returns false if feature is disabled' do
+        subject.disable
+        expect(subject.enabled?(actor)).to be(false)
+      end
+    end
   end
 
   describe '#to_s' do
@@ -195,7 +215,7 @@ RSpec.describe Flipper::Feature do
 
     it 'is recorded for enable' do
       actor = Flipper::Types::Actor.new(Flipper::Actor.new('1'))
-      gate = subject.gate_for(actor)
+      subject.gate_for(actor)
 
       subject.enable(actor)
 
@@ -210,7 +230,7 @@ RSpec.describe Flipper::Feature do
 
     it 'always instruments flipper type instance for enable' do
       actor = Flipper::Actor.new('1')
-      gate = subject.gate_for(actor)
+      subject.gate_for(actor)
 
       subject.enable(actor)
 
@@ -221,7 +241,6 @@ RSpec.describe Flipper::Feature do
 
     it 'is recorded for disable' do
       thing = Flipper::Types::Boolean.new
-      gate = subject.gate_for(thing)
 
       subject.disable(thing)
 
@@ -266,7 +285,6 @@ RSpec.describe Flipper::Feature do
 
     it 'always instruments flipper type instance for disable' do
       actor = Flipper::Actor.new('1')
-      gate = subject.gate_for(actor)
 
       subject.disable(actor)
 
@@ -709,7 +727,6 @@ RSpec.describe Flipper::Feature do
     context "with expression instance" do
       it "updates gate values to equal expression or clears expression" do
         expression = Flipper.property(:plan).eq("basic")
-        other_expression = Flipper.property(:age).gte(21)
         expect(subject.gate_values.expression).to be(nil)
         subject.enable_expression(expression)
         expect(subject.gate_values.expression).to eq(expression.value)
@@ -721,7 +738,6 @@ RSpec.describe Flipper::Feature do
     context "with Hash" do
       it "updates gate values to equal expression or clears expression" do
         expression = Flipper.property(:plan).eq("basic")
-        other_expression = Flipper.property(:age).gte(21)
         expect(subject.gate_values.expression).to be(nil)
         subject.enable_expression(expression.value)
         expect(subject.gate_values.expression).to eq(expression.value)
@@ -1078,8 +1094,6 @@ RSpec.describe Flipper::Feature do
   describe '#enable_group/disable_group' do
     context 'with symbol group name' do
       it 'updates the gate values to include the group' do
-        actor = Flipper::Actor.new(5)
-        group = Flipper.register(:five_only) { |actor| actor.flipper_id == 5 }
         expect(subject.gate_values.groups).to be_empty
         subject.enable_group(:five_only)
         expect(subject.gate_values.groups).to eq(Set['five_only'])
@@ -1090,8 +1104,6 @@ RSpec.describe Flipper::Feature do
 
     context 'with string group name' do
       it 'updates the gate values to include the group' do
-        actor = Flipper::Actor.new(5)
-        group = Flipper.register(:five_only) { |actor| actor.flipper_id == 5 }
         expect(subject.gate_values.groups).to be_empty
         subject.enable_group('five_only')
         expect(subject.gate_values.groups).to eq(Set['five_only'])
@@ -1102,7 +1114,6 @@ RSpec.describe Flipper::Feature do
 
     context 'with group instance' do
       it 'updates the gate values for the group' do
-        actor = Flipper::Actor.new(5)
         group = Flipper.register(:five_only) { |actor| actor.flipper_id == 5 }
         expect(subject.gate_values.groups).to be_empty
         subject.enable_group(group)

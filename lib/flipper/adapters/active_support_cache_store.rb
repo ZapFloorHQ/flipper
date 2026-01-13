@@ -7,7 +7,11 @@ module Flipper
     # Public: Adapter that wraps another adapter with the ability to cache
     # adapter calls in ActiveSupport::ActiveSupportCacheStore caches.
     class ActiveSupportCacheStore < CacheBase
-      def initialize(adapter, cache, ttl = nil, expires_in: :none_provided, write_through: false, prefix: nil)
+
+      # Public: The race_condition_ttl for all cached data.
+      attr_reader :race_condition_ttl
+
+      def initialize(adapter, cache, ttl = nil, expires_in: :none_provided, race_condition_ttl: nil, write_through: false, prefix: nil)
         if expires_in == :none_provided
           ttl ||= nil
         else
@@ -18,6 +22,7 @@ module Flipper
           ttl = expires_in
         end
         super(adapter, cache, ttl, prefix: prefix)
+        @race_condition_ttl = race_condition_ttl
         @write_through = write_through
       end
 
@@ -36,6 +41,7 @@ module Flipper
         if @write_through
           result = @adapter.enable(feature, gate, thing)
           cache_write feature_cache_key(feature.key), @adapter.get(feature)
+          expire_get_all_cache
           result
         else
           super
@@ -46,6 +52,7 @@ module Flipper
         if @write_through
           result = @adapter.disable(feature, gate, thing)
           cache_write feature_cache_key(feature.key), @adapter.get(feature)
+          expire_get_all_cache
           result
         else
           super
@@ -73,6 +80,7 @@ module Flipper
       def write_options
         write_options = {}
         write_options[:expires_in] = @ttl if @ttl
+        write_options[:race_condition_ttl] if @race_condition_ttl
         write_options
       end
     end

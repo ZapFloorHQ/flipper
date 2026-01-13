@@ -31,7 +31,7 @@ module Flipper
     # Public: Get all features and gate values in one call. Defaults to one call
     # to features and another to get_multi. Feel free to override per adapter to
     # make this more efficient.
-    def get_all
+    def get_all(**kwargs)
       instances = features.map { |key| Flipper::Feature.new(key, self) }
       get_multi(instances)
     end
@@ -72,6 +72,22 @@ module Flipper
     # Public: default name of the adapter
     def name
       @name ||= self.class.name.split('::').last.split(/(?=[A-Z])/).join('_').downcase.to_sym
+    end
+
+    # Public: Returns a string representation of the adapter stack for debugging.
+    # Shows the full chain of wrapped adapters.
+    #
+    # Examples:
+    #   "memoizable -> active_support_cache_store -> active_record"
+    #   "memoizable -> failover(primary: redis, secondary: memory)"
+    #
+    # Returns a String.
+    def adapter_stack
+      if respond_to?(:adapter) && adapter
+        "#{name} -> #{adapter.adapter_stack}"
+      else
+        name.to_s
+      end
     end
   end
 end

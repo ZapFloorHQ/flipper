@@ -3,7 +3,6 @@ require "socket"
 require "flipper/adapters/http"
 require "flipper/adapters/poll"
 require "flipper/poller"
-require "flipper/adapters/memory"
 require "flipper/adapters/dual_write"
 require "flipper/adapters/sync/synchronizer"
 require "flipper/cloud/telemetry"
@@ -111,9 +110,10 @@ module Flipper
       end
 
       # Public: Force a sync.
-      def sync
+      def sync(cache_bust: false)
         Flipper::Adapters::Sync::Synchronizer.new(local_adapter, http_adapter, {
           instrumenter: instrumenter,
+          cache_bust: cache_bust,
         }).call
       end
 
@@ -135,11 +135,14 @@ module Flipper
         logger.send(level, "name=flipper_cloud #{message}")
       end
 
+      def instrument(name, payload = {}, &block)
+        instrumenter.instrument(name, payload, &block)
+      end
+
       private
 
       def app_adapter
-        read_adapter = sync_method == :webhook ? local_adapter : poll_adapter
-        Flipper::Adapters::DualWrite.new(read_adapter, http_adapter)
+        Flipper::Adapters::DualWrite.new(poll_adapter, http_adapter)
       end
 
       def poller
@@ -198,8 +201,13 @@ module Flipper
       end
 
       def setup_sync(options)
-        set_option :sync_interval, options, default: 10, typecast: :float, minimum: 10
         set_option :sync_secret, options
+
+        # 1 hour for webhook, 10 seconds for poll. If using webhooks we don't
+        # need to sync as often but we should still sync occasionally to avoid
+        # any chance of stale data.
+        default_interval = sync_method == :webhook ? 3600 : 10
+        set_option :sync_interval, options, default: default_interval, typecast: :float, minimum: 10
       end
 
       def setup_adapter(options)
@@ -242,7 +250,7 @@ module Flipper
         if required
           option_value = send(name)
           if option_value.nil? || option_value.empty?
-            message = "Flipper::Cloud #{name} is missing. Please "
+            message = String.new("Flipper::Cloud #{name} is missing. Please ")
             message << "set #{env_var} or " if from_env
             message << "provide #{name} (e.g. Flipper::Cloud.new(#{name}: value))."
             raise ArgumentError, message

@@ -28,6 +28,16 @@ RSpec.describe Flipper::UI::Actions::Features do
       end
     end
 
+    it "escapes keys that are junky" do
+      flipper.add("../../../../blah")
+      flipper.add("this that")
+      flipper.add("foo/bar")
+      get '/features'
+      expect(last_response.body).to include("..%2F..%2F..%2F..%2Fblah")
+      expect(last_response.body).to include("this+that")
+      expect(last_response.body).to include("foo%2Fbar")
+    end
+
     context "when there are no features to list" do
       before do
         @original_fun_enabled = Flipper::UI.configuration.fun
@@ -78,6 +88,25 @@ RSpec.describe Flipper::UI::Actions::Features do
         expect(last_response.body).not_to include('<a class="btn btn-primary btn-sm" href="/features/new">Add Feature</a>')
       end
     end
+
+    context 'when descriptions have links' do
+      before do
+        Flipper::UI.configuration.show_feature_description_in_list = true
+        Flipper::UI.configuration.descriptions_source = lambda { |_keys|
+          { 'test_feature' => 'Check <a href="https://example.com">this link</a> for more info' }
+        }
+
+        flipper[:test_feature].enable
+      end
+
+      it 'strips anchor tags from descriptions to avoid nested links' do
+        get '/features'
+
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include('Check this link for more info')
+        expect(last_response.body).not_to include('<a href="https://example.com">this link</a>')
+      end
+    end
   end
 
   describe 'POST /features' do
@@ -124,7 +153,20 @@ RSpec.describe Flipper::UI::Actions::Features do
 
         it 'redirects to feature' do
           expect(last_response.status).to be(302)
-          expect(last_response.headers['location']).to eq('/features/notifications%20next')
+          expect(last_response.headers['location']).to eq('/features/notifications+next')
+        end
+      end
+
+      context 'feature name contains ../' do
+        let(:feature_name) { '../../../foo' }
+
+        it 'adds feature with space' do
+          expect(flipper.features.map(&:key)).to include(feature_name)
+        end
+
+        it 'redirects to feature' do
+          expect(last_response.status).to be(302)
+          expect(last_response.headers['location']).to eq('/features/..%2F..%2F..%2Ffoo')
         end
       end
 
@@ -138,7 +180,7 @@ RSpec.describe Flipper::UI::Actions::Features do
 
           it 'redirects back to feature' do
             expect(last_response.status).to be(302)
-            expect(last_response.headers['location']).to eq('/features/new?error=%22%22%20is%20not%20a%20valid%20feature%20name.')
+            expect(last_response.headers['location']).to eq('/features/new?error=%22%22+is+not+a+valid+feature+name.')
           end
         end
 
@@ -151,7 +193,7 @@ RSpec.describe Flipper::UI::Actions::Features do
 
           it 'redirects back to feature' do
             expect(last_response.status).to be(302)
-            expect(last_response.headers['location']).to eq('/features/new?error=%22%22%20is%20not%20a%20valid%20feature%20name.')
+            expect(last_response.headers['location']).to eq('/features/new?error=%22%22+is+not+a+valid+feature+name.')
           end
         end
       end

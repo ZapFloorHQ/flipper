@@ -7,12 +7,20 @@ require 'sanitize'
 
 module Flipper
   module UI
+    # Sanitize config for descriptions in list view. Removes anchor tags to
+    # avoid nested links (the feature row is wrapped in an <a> tag).
+    # See: https://github.com/flippercloud/flipper/issues/939
+    SANITIZE_LIST = Sanitize::Config.merge(
+      Sanitize::Config::BASIC,
+      elements: Sanitize::Config::BASIC[:elements] - ['a']
+    )
+
     class Action
       module FeatureNameFromRoute
         def feature_name
           @feature_name ||= begin
             match = request.path_info.match(self.class.route_regex)
-            match ? Rack::Utils.unescape(match[:feature_name]) : nil
+            match ? Flipper::UI::Util.unescape(match[:feature_name]) : nil
           end
         end
         private :feature_name
@@ -164,7 +172,7 @@ module Flipper
       # location - The String location to set the Location header to.
       def redirect_to(location)
         status 302
-        header 'location', "#{script_name}#{Rack::Utils.escape_path(location)}"
+        header 'location', "#{script_name}#{location}"
         halt [@code, @headers, ['']]
       end
 

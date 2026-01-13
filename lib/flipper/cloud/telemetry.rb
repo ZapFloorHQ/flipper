@@ -75,8 +75,8 @@ module Flipper
 
         @metric_storage = MetricStorage.new
 
-        @pool = Concurrent::FixedThreadPool.new(2, {
-          max_queue: 5,
+        @pool = Concurrent::FixedThreadPool.new(1, {
+          max_queue: 20, # ~ 20 minutes of data at 1 minute intervals
           fallback_policy: :discard,
           name: "flipper-telemetry-post-to-cloud-pool".freeze,
         })
@@ -168,7 +168,7 @@ module Flipper
           end
 
           if interval = response["telemetry-interval"]
-            self.interval = interval.to_f
+            self.interval = interval
           end
         end
       rescue => error

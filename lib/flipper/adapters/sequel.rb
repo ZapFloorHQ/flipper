@@ -30,7 +30,7 @@ module Flipper
       end
 
       VALUE_TO_TEXT_WARNING = <<-EOS
-        Your database needs migrated to use the latest Flipper features.
+        Your database needs to be migrated to use the latest Flipper features.
         See https://github.com/flippercloud/flipper/issues/557
       EOS
 
@@ -101,7 +101,7 @@ module Flipper
         result
       end
 
-      def get_all
+      def get_all(**kwargs)
         feature_table = @feature_class.table_name.to_sym
         gate_table = @gate_class.table_name.to_sym
         features_sql = @feature_class.select(::Sequel.qualify(feature_table, :key).as(:feature_key))

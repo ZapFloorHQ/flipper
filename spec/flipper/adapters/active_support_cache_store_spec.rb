@@ -8,7 +8,8 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
   end
   let(:cache) { ActiveSupport::Cache::MemoryStore.new }
   let(:write_through) { false }
-  let(:adapter) { described_class.new(memory_adapter, cache, 10, write_through: write_through) }
+  let(:race_condition_ttl) { 5 }
+  let(:adapter) { described_class.new(memory_adapter, cache, 10, race_condition_ttl: race_condition_ttl, write_through: write_through) }
   let(:flipper) { Flipper.new(adapter) }
 
   subject { adapter }
@@ -42,6 +43,15 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     expect(adapter.ttl).to be(nil)
   end
 
+  it "knows race_condition_ttl" do
+    expect(adapter.race_condition_ttl).to eq(race_condition_ttl)
+  end
+
+  it "knows default when no ttl or expires_in provided" do
+    adapter = described_class.new(memory_adapter, cache)
+    expect(adapter.race_condition_ttl).to be(nil)
+  end
+
   it "knows features_cache_key" do
     expect(adapter.features_cache_key).to eq("flipper/v1/features")
   end
@@ -51,9 +61,13 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     adapter.features
     expect(cache.read("flipper/v1/features")).not_to be(nil)
 
+    adapter.get_all
+    expect(cache.read("flipper/v1/get_all")).not_to be(nil)
+
     # expire cache
     adapter.expire_features_cache
     expect(cache.read("flipper/v1/features")).to be(nil)
+    expect(cache.read("flipper/v1/get_all")).to be(nil)
   end
 
   it "can expire feature cache" do
@@ -61,9 +75,13 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     adapter.get(flipper[:stats])
     expect(cache.read("flipper/v1/feature/stats")).not_to be(nil)
 
+    adapter.get_all
+    expect(cache.read("flipper/v1/get_all")).not_to be(nil)
+
     # expire cache
     adapter.expire_feature_cache("stats")
     expect(cache.read("flipper/v1/feature/stats")).to be(nil)
+    expect(cache.read("flipper/v1/get_all")).to be(nil)
   end
 
   it "can generate feature cache key" do
@@ -76,6 +94,10 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
 
     it "knows features_cache_key" do
       expect(adapter.features_cache_key).to eq("foo/flipper/v1/features")
+    end
+
+    it "knows get_all_cache_key" do
+      expect(adapter.get_all_cache_key).to eq("foo/flipper/v1/get_all")
     end
 
     it "can generate feature cache key" do
@@ -99,9 +121,10 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
       adapter.get_all
 
       # verify cached with prefix
+      get_all_cache_value = cache.read("foo/flipper/v1/get_all")
       expect(cache.read("foo/flipper/v1/features")).to eq(Set["stats", "search"])
-      expect(cache.read("foo/flipper/v1/feature/search")[:percentage_of_actors]).to eq("10")
-      expect(cache.read("foo/flipper/v1/feature/stats")[:boolean]).to eq("true")
+      expect(get_all_cache_value["search"][:percentage_of_actors]).to eq("10")
+      expect(get_all_cache_value["stats"][:boolean]).to eq("true")
     end
   end
 
@@ -110,11 +133,13 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
 
     before do
       adapter.get(feature)
+      adapter.get_all
       adapter.remove(feature)
     end
 
     it 'expires feature and deletes the cache' do
       expect(cache.read("flipper/v1/feature/#{feature.key}")).to be_nil
+      expect(cache.read("flipper/v1/get_all")).to be(nil)
       expect(cache.exist?("flipper/v1/feature/#{feature.key}")).to be(false)
       expect(feature).not_to be_enabled
     end
@@ -134,10 +159,13 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     let(:feature) { flipper[:stats] }
 
     before do
+      adapter.get(feature)
+      adapter.get_all
       adapter.enable(feature, feature.gate(:boolean), Flipper::Types::Boolean.new(true))
     end
 
     it 'enables feature and deletes the cache' do
+      expect(cache.read("flipper/v1/get_all")).to be(nil)
       expect(cache.read("flipper/v1/feature/#{feature.key}")).to be_nil
       expect(cache.exist?("flipper/v1/feature/#{feature.key}")).to be(false)
       expect(feature).to be_enabled
@@ -147,6 +175,7 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
       let(:write_through) { true }
 
       it 'expires feature and writes to the cache' do
+        expect(cache.read("flipper/v1/get_all")).to be(nil)
         expect(cache.exist?("flipper/v1/feature/#{feature.key}")).to be(true)
         expect(cache.read("flipper/v1/feature/#{feature.key}")).to include(boolean: 'true')
         expect(feature).to be_enabled
@@ -158,10 +187,13 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     let(:feature) { flipper[:stats] }
 
     before do
+      adapter.get(feature)
+      adapter.get_all
       adapter.disable(feature, feature.gate(:boolean), Flipper::Types::Boolean.new)
     end
 
     it 'disables feature and deletes the cache' do
+      expect(cache.read("flipper/v1/get_all")).to be(nil)
       expect(cache.read("flipper/v1/feature/#{feature.key}")).to be_nil
       expect(cache.exist?("flipper/v1/feature/#{feature.key}")).to be(false)
       expect(feature).not_to be_enabled
@@ -214,8 +246,10 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
 
     it 'warms all features' do
       adapter.get_all
-      expect(cache.read("flipper/v1/feature/#{stats.key}")[:boolean]).to eq('true')
-      expect(cache.read("flipper/v1/feature/#{search.key}")[:boolean]).to be(nil)
+      get_all_cache_value = cache.read("flipper/v1/get_all")
+      expect(get_all_cache_value).not_to be(nil)
+      expect(get_all_cache_value["stats"][:boolean]).to eq('true')
+      expect(get_all_cache_value["search"][:boolean]).to be(nil)
       expect(cache.read("flipper/v1/features")).to eq(Set["stats", "search"])
     end
 
@@ -226,9 +260,8 @@ RSpec.describe Flipper::Adapters::ActiveSupportCacheStore do
     it 'only invokes two calls to wrapped adapter (for features set and gate data for each feature in set)' do
       memory_adapter.reset
       5.times { adapter.get_all }
-      expect(memory_adapter.count(:features)).to eq(1)
-      expect(memory_adapter.count(:get_multi)).to eq(1)
-      expect(memory_adapter.count).to eq(2)
+      expect(memory_adapter.count(:get_all)).to eq(1)
+      expect(memory_adapter.count).to eq(1)
     end
   end
 
