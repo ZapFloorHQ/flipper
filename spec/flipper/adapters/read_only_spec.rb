@@ -1,4 +1,5 @@
 require 'flipper/adapters/read_only'
+require 'flipper/adapters/failsafe'
 
 RSpec.describe Flipper::Adapters::ReadOnly do
   let(:adapter) { Flipper::Adapters::Memory.new }
@@ -96,5 +97,39 @@ RSpec.describe Flipper::Adapters::ReadOnly do
   it 'raises error on disable' do
     expect { subject.disable(feature, boolean_gate, Flipper::Types::Boolean.new) }
       .to raise_error(Flipper::Adapters::ReadOnly::WriteAttempted)
+  end
+
+  it 'raises error on import without changing the wrapped adapter' do
+    adapter.add(feature)
+    source = Flipper::Adapters::Memory.new
+    source.add(Flipper::Feature.new(:replacement, source))
+
+    expect { subject.import(source) }
+      .to raise_error(Flipper::Adapters::ReadOnly::WriteAttempted)
+    expect(adapter.features).to eq(Set['stats'])
+  end
+
+  context 'when wrapped by another adapter' do
+    {
+      'ActorLimit' => ->(adapter) { Flipper::Adapters::ActorLimit.new(adapter) },
+      'Strict' => ->(adapter) { Flipper::Adapters::Strict.new(adapter, :warn) },
+      'Failsafe' => ->(adapter) { Flipper::Adapters::Failsafe.new(adapter) },
+      'Instrumented' => ->(adapter) { Flipper::Adapters::Instrumented.new(adapter) },
+    }.each do |name, wrap|
+      it "is still read only inside #{name}" do
+        expect(wrap.call(subject).read_only?).to be(true)
+        expect(wrap.call(adapter).read_only?).to be(false)
+      end
+    end
+  end
+
+  it 'reads the sync version from the wrapped adapter' do
+    adapter.sync_version = Flipper::SyncVersion.new("scope", 10)
+    expect(subject.sync_version).to eq(adapter.sync_version)
+  end
+
+  it 'raises when recording a sync version' do
+    expect { subject.sync_version = Flipper::SyncVersion.new("scope", 10) }.to raise_error(Flipper::Adapters::ReadOnly::WriteAttempted)
+    expect(adapter.sync_version).to be_nil
   end
 end

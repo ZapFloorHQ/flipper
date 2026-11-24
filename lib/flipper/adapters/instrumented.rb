@@ -26,6 +26,11 @@ module Flipper
       end
 
       # Public
+      def read_only?
+        @adapter.read_only?
+      end
+
+      # Public
       def features
         default_payload = {
           operation: :features,
@@ -139,6 +144,29 @@ module Flipper
 
         @instrumenter.instrument(InstrumentationName, default_payload) do |payload|
           payload[:result] = @adapter.disable(feature, gate, thing)
+        end
+      end
+
+      def sync_version
+        default_payload = {
+          operation: :sync_version,
+          adapter_name: @adapter.name,
+        }
+
+        @instrumenter.instrument(InstrumentationName, default_payload) do |payload|
+          payload[:result] = @adapter.sync_version
+        end
+      end
+
+      def sync_version=(version)
+        default_payload = {
+          operation: :set_sync_version,
+          adapter_name: @adapter.name,
+          version: version,
+        }
+
+        @instrumenter.instrument(InstrumentationName, default_payload) do |payload|
+          payload[:result] = @adapter.sync_version = version
         end
       end
 

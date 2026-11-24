@@ -140,5 +140,60 @@ RSpec.describe Flipper::UI::Actions::GroupsGate do
         end
       end
     end
+
+    context 'disabling a group that is no longer registered' do
+      before do
+        flipper[:search].enable_group :admins
+        Flipper.unregister_groups
+        post 'features/search/groups',
+             { 'value' => 'admins', 'operation' => 'disable', 'authenticity_token' => token },
+             'rack.session' => session
+      end
+
+      it 'removes item from members' do
+        expect(flipper[:search].groups_value).not_to include('admins')
+      end
+
+      it 'redirects back to feature' do
+        expect(last_response.status).to be(302)
+        expect(last_response.headers['location']).to eq('/features/search')
+      end
+    end
+
+    context 'disabling an unregistered group the feature does not have' do
+      before do
+        flipper[:search].enable_group :admins
+        post 'features/search/groups',
+             { 'value' => 'not_here', 'operation' => 'disable', 'authenticity_token' => token },
+             'rack.session' => session
+      end
+
+      it 'leaves the enabled groups alone' do
+        expect(flipper[:search].groups_value).to eq(Set['admins'])
+      end
+
+      it 'redirects back to feature' do
+        expect(last_response.status).to be(302)
+        expect(last_response.headers['location']).to eq('/features/search')
+      end
+    end
+  end
+
+  context "with a named Flipper instance" do
+    let(:app) { build_app(Flipper.cross_app, env_key: "flipper_cross_app") }
+
+    before do
+      Flipper.configure { |config| config.named(:cross_app) }
+      Flipper.cross_app.register(:named_group) { true }
+      post 'features/search/groups',
+           { 'value' => 'named_group', 'operation' => 'enable', 'authenticity_token' => token },
+           'rack.session' => session
+    end
+
+    it "validates and enables groups from the named registry" do
+      expect(last_response.status).to be(302)
+      expect(Flipper.cross_app[:search].groups_value).to include("named_group")
+      expect(Flipper.group_exists?(:named_group)).to be(false)
+    end
   end
 end

@@ -16,6 +16,14 @@ RSpec.describe Flipper::Adapters::Poll do
     })
   }
 
+  it "reads and records the sync version in the local adapter" do
+    instance = described_class.new(poller, local_adapter)
+    version = Flipper::SyncVersion.new("scope", 10)
+    instance.sync_version = version
+    expect(local_adapter.sync_version).to eq(version)
+    expect(instance.sync_version).to eq(version)
+  end
+
   it "syncs in main thread if local adapter is empty" do
     instance = described_class.new(poller, local_adapter)
     instance.features # call something to force sync
@@ -37,5 +45,15 @@ RSpec.describe Flipper::Adapters::Poll do
     instance.features # call something to force sync
 
     expect(local_adapter.features).to eq(remote_adapter.features)
+  end
+
+  it "calls the synchronizer instead of syncing into the adapter" do
+    calls = 0
+    instance = described_class.new(poller, local_adapter, synchronizer: -> { calls += 1 })
+    instance.features
+    instance.features
+
+    expect(calls).to eq(1)
+    expect(local_adapter.features).to be_empty
   end
 end

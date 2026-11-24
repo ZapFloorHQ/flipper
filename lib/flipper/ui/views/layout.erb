@@ -11,15 +11,17 @@
   </head>
   <body class="py-4">
     <div class="container mw-600">
-      <%- unless Flipper::UI.configuration.banner_text.nil? -%>
-        <div class="alert alert-<%= Flipper::UI.configuration.banner_class %> text-center fw-bold">
-          <%== Sanitize.fragment(Flipper::UI.configuration.banner_text, Sanitize::Config::BASIC) %>
+      <%- unless banner_text.nil? -%>
+        <div class="alert alert-<%= banner_class %> text-center fw-bold">
+          <%== Sanitize.fragment(banner_text, Sanitize::Config::BASIC) %>
         </div>
       <%- end -%>
 
       <div class="text-muted small text-end">
-        <a href="#" class="badge text-bg-warning ms-2 d-none" style="font-size:100%" id="new-version-badge" data-version="<%= Flipper::VERSION %>">
-        </a>
+        <% if Flipper::UI.configuration.version_check_enabled %>
+          <a href="#" class="badge text-bg-warning ms-2 d-none" style="font-size:100%" id="new-version-badge" data-version="<%= Flipper::VERSION %>">
+          </a>
+        <% end %>
 
         <% if Flipper.deprecated_ruby_version? %>
           <a href="https://github.com/flippercloud/flipper/pull/776" class="badge text-bg-danger ms-2" style="font-size:100%">
@@ -55,6 +57,10 @@
           <li class="nav-item ms-auto text-muted small">
             <a href="https://www.flippercloud.io/docs/ui?utm_source=oss&utm_medium=ui&utm_campaign=docs">Docs</a>
             &bull;
+            <% if Flipper::UI.configuration.fun %>
+              <a href="https://shop.verygoodsoftware.company/product/i-deploy-on-fridays-tee?utm_source=oss&utm_medium=ui&utm_campaign=merch" title="Do you deploy on Fridays?">Shirt</a>
+              &bull;
+            <% end %>
             Version: <%= Flipper::VERSION %>
           </li>
         </ul>
@@ -73,7 +79,7 @@
               </a>
             </div>
             <div class="col text-muted p-0">
-              <small>For audit history, rollback, finer-grained permissions, and multi-environment sync check out <a href="https://www.flippercloud.io/?utm_source=oss&utm_medium=ui&utm_campaign=spread_the_love">Flipper&nbsp;Cloud</a>. We even have a free tier!</small>
+              <small>For audit history, rollback, finer-grained permissions, multi-environment sync, and an MCP server that finds flags ready to remove, check out <a href="https://www.flippercloud.io/?utm_source=oss&utm_medium=ui&utm_campaign=spread_the_love">Flipper&nbsp;Cloud</a>. We even have a free tier!</small>
             </div>
           </div>
         </div>
@@ -83,6 +89,8 @@
     <script src="<%= script_name + popper_js[:src] %>" integrity="<%= popper_js[:hash] %>" crossorigin="anonymous"></script>
     <script src="<%= script_name + bootstrap_js[:src] %>" integrity="<%= bootstrap_js[:hash] %>" crossorigin="anonymous"></script>
     <script src="<%= script_name %>/js/application.js?v=<%= Flipper::VERSION %>"></script>
-    <script src="<%= script_name %>/js/version.js?v=<%= Flipper::VERSION %>"></script>
+    <% if Flipper::UI.configuration.version_check_enabled %>
+      <script src="<%= script_name %>/js/version.js?v=<%= Flipper::VERSION %>"></script>
+    <% end %>
   </body>
 </html>

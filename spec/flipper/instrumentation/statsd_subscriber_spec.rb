@@ -67,6 +67,22 @@ RSpec.describe Flipper::Instrumentation::StatsdSubscriber do
     end
   end
 
+  context 'for a named instance' do
+    it 'namespaces feature counters by instance' do
+      Flipper.configure do |config|
+        config.named(:cross_app) do |named|
+          named.instrumenter = ActiveSupport::Notifications
+        end
+      end
+
+      Flipper.cross_app.enable(:stats)
+      Flipper.cross_app.enabled?(:stats)
+
+      assert_timer 'flipper.feature_operation.enabled'
+      assert_counter 'flipper.cross_app.feature.stats.enabled'
+    end
+  end
+
   it 'updates adapter metrics when calls happen' do
     flipper[:stats].enable(user)
     assert_timer 'flipper.adapter.memory.enable'
@@ -76,6 +92,16 @@ RSpec.describe Flipper::Instrumentation::StatsdSubscriber do
 
     flipper[:stats].disable(user)
     assert_timer 'flipper.adapter.memory.disable'
+  end
+
+  # Events the gem instruments that have no metrics of their own.
+  %w(synchronizer_call synchronizer_exception synchronizer_stale poller telemetry_error telemetry_retry).each do |operation|
+    it "ignores #{operation} events without printing" do
+      expect {
+        ActiveSupport::Notifications.instrument("#{operation}.flipper", {})
+      }.not_to output.to_stdout
+      expect(socket.buffer).to be_empty
+    end
   end
 
   context 'when client is nil' do

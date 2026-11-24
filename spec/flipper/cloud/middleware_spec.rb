@@ -33,7 +33,7 @@ RSpec.describe Flipper::Cloud::Middleware do
     Flipper::Cloud::MessageVerifier.new(secret: flipper.sync_secret).generate(request_body, timestamp)
   }
   let(:signature_header_value) {
-    Flipper::Cloud::MessageVerifier.new(secret: "").header(signature, timestamp)
+    Flipper::Cloud::MessageVerifier.header(signature, timestamp)
   }
 
   context 'when initializing middleware with flipper instance' do
@@ -66,6 +66,36 @@ RSpec.describe Flipper::Cloud::Middleware do
     end
   end
 
+  context "with a named Flipper instance" do
+    let(:app) { Flipper::Cloud.app(Flipper.cross_app, env_key: "flipper_cross_app") }
+    let(:signature) {
+      Flipper::Cloud::MessageVerifier.new(secret: "regular_tasty").generate(request_body, timestamp)
+    }
+
+    before do
+      Flipper.register(:default_group) { false }
+      Flipper.configure do |config|
+        config.named(:cross_app).default { flipper }
+      end
+      Flipper.cross_app.register(:cross_app_group) { true }
+    end
+
+    it "reports groups owned by the named instance" do
+      stub_request_for_token("regular")
+      webhook_stub = stub_request_for_token("regular", from_webhook: true)
+
+      post "/", request_body, {
+        "HTTP_FLIPPER_CLOUD_SIGNATURE" => signature_header_value,
+      }
+
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq({
+        "groups" => [{"name" => "cross_app_group"}],
+      })
+      expect(webhook_stub).to have_been_requested.once
+    end
+  end
+
   context 'when signature is invalid' do
     let(:app) { Flipper::Cloud.app(flipper) }
     let(:signature) {
@@ -83,6 +113,54 @@ RSpec.describe Flipper::Cloud::Middleware do
       expect(last_response.status).to eq(400)
       expect(poll_regular_stub).to have_been_requested.at_least_once
       expect(webhook_regular_stub).not_to have_been_requested
+    end
+  end
+
+  context 'when the request has no rack.input' do
+    let(:app) { Flipper::Cloud.app(flipper) }
+
+    it 'does not perform webhook sync' do
+      webhook_regular_stub = stub_request_for_token('regular', from_webhook: true)
+      stub_request_for_token('regular', from_webhook: false)
+
+      status, _headers, _body = call_without_rack_input('/', method: 'POST', "HTTP_FLIPPER_CLOUD_SIGNATURE" => signature_header_value)
+
+      expect(status).to eq(400)
+      expect(webhook_regular_stub).not_to have_been_requested
+    end
+  end
+
+  context 'when signature timestamp is outside the tolerance' do
+    let(:app) { Flipper::Cloud.app(flipper) }
+    let(:timestamp) { Time.now - (60 * 60) }
+
+    it 'rejects the replayed webhook without syncing' do
+      stub_request_for_token('regular')
+      stub = stub_request_for_token('regular', from_webhook: true)
+      env = {
+        "HTTP_FLIPPER_CLOUD_SIGNATURE" => signature_header_value,
+      }
+      post '/', request_body, env
+
+      expect(last_response.status).to eq(400)
+      expect(stub).not_to have_been_requested
+    end
+  end
+
+  context 'when initialized with a custom signature tolerance' do
+    let(:app) { Flipper::Cloud.app(flipper, signature_tolerance: 60 * 60 * 2) }
+    let(:timestamp) { Time.now - (60 * 60) }
+
+    it 'uses the provided tolerance when verifying the webhook' do
+      stub_request_for_token('regular')
+      stub = stub_request_for_token('regular', from_webhook: true)
+      env = {
+        "HTTP_FLIPPER_CLOUD_SIGNATURE" => signature_header_value,
+      }
+      post '/', request_body, env
+
+      expect(last_response.status).to eq(200)
+      expect(stub).to have_been_requested
     end
   end
 
@@ -202,8 +280,9 @@ RSpec.describe Flipper::Cloud::Middleware do
     }
 
     it 'uses provided env key instead of default' do
-      regular_poll_stub = stub_request_for_token('regular')
-      env_poll_stub = stub_request_for_token('env')
+      stub_request_for_token('regular')
+      stub_request_for_token('env')
+      regular_webhook_stub = stub_request_for_token('regular', from_webhook: true)
       env_webhook_stub = stub_request_for_token('env', from_webhook: true)
       env = {
         "HTTP_FLIPPER_CLOUD_SIGNATURE" => signature_header_value,
@@ -213,9 +292,8 @@ RSpec.describe Flipper::Cloud::Middleware do
       post '/', request_body, env
 
       expect(last_response.status).to eq(200)
-      expect(regular_poll_stub).to have_been_made.at_least_once
-      expect(env_poll_stub).to have_been_made.at_least_once
-      expect(env_webhook_stub).not_to have_been_requested
+      expect(env_webhook_stub).to have_been_requested
+      expect(regular_webhook_stub).not_to have_been_requested
     end
   end
 
@@ -266,7 +344,7 @@ RSpec.describe Flipper::Cloud::Middleware do
 
   describe 'Request method unsupported' do
     it 'skips middleware' do
-      stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+      stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
       get '/'
       expect(last_response.status).to eq(404)
       expect(last_response.content_type).to eq("application/json")
@@ -276,7 +354,7 @@ RSpec.describe Flipper::Cloud::Middleware do
 
   describe 'Inspecting the built Rack app' do
     it 'returns a String' do
-      stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+      stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
       expect(Flipper::Cloud.app(flipper).inspect).to eq("Flipper::Cloud")
     end
   end
@@ -284,12 +362,12 @@ RSpec.describe Flipper::Cloud::Middleware do
   private
 
   def stub_request_for_token(token, status: 200, from_webhook: false)
-    if from_webhook
-      # Match URL with both exclude_gate_names=true and _cb=integer
-      url_pattern = %r{https://www\.flippercloud\.io/adapter/features\?.*exclude_gate_names=true.*&_cb=\d+}
+    url_pattern = if from_webhook
+      # Only webhook syncs, which bust the cache with _cb=integer.
+      %r{\Ahttps://www\.flippercloud\.io/adapter/features\?(?=.*\bexclude_gate_names=true\b)(?=.*\b_cb=\d+\b)}
     else
-      # Match URL with just exclude_gate_names=true
-      url_pattern = %r{https://www\.flippercloud\.io/adapter/features\?.*exclude_gate_names=true}
+      # Polls and webhook syncs.
+      %r{\Ahttps://www\.flippercloud\.io/adapter/features\?(?=.*\bexclude_gate_names=true\b)}
     end
 
     stub = stub_request(:get, url_pattern).

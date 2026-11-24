@@ -573,6 +573,19 @@ RSpec.describe Flipper do
       expect(feature.enabled?(admin_actor)).to be(false)
     end
 
+    it "is disabled instead of raising for an expression this version does not know" do
+      # Like an expression synced from a newer Flipper (e.g. Cloud) that this
+      # version doesn't have yet.
+      unknown = {"GreaterThan" => [{"Unreleased" => [{"Property" => ["plan"]}]}, "basic"]}
+      export = Flipper::Typecast.to_json("version" => 1, "features" => {
+        "search" => {"boolean" => nil, "groups" => [], "actors" => [], "expression" => unknown, "percentage_of_actors" => nil, "percentage_of_time" => nil},
+      })
+      adapter.import(Flipper::Exporters::Json::Export.new(contents: export))
+
+      expect(feature.enabled?(basic_plan_actor)).to be(false)
+      expect(feature.enabled?).to be(false)
+    end
+
     it "works for true expression with no actor" do
       feature.enable Flipper.boolean(true)
       expect(feature.enabled?).to be(true)
@@ -594,6 +607,139 @@ RSpec.describe Flipper do
         Flipper.property(:plan).eq("plus"),
       )
       feature.enable expression
+
+      expect(feature.enabled?(basic_plan_actor)).to be(true)
+      expect(feature.enabled?(premium_plan_actor)).to be(false)
+    end
+  end
+
+  context "for FeatureEnabled" do
+    before do
+      @original_instance = Flipper.instance
+      Flipper.instance = flipper
+    end
+
+    after do
+      Flipper.instance = @original_instance
+      Thread.current[:flipper_evaluating_features] = nil
+    end
+
+    it "returns true when referenced feature is enabled" do
+      flipper.enable(:search_beta)
+      feature.enable Flipper.feature_enabled(:search_beta)
+
+      expect(feature.enabled?).to be(true)
+    end
+
+    it "returns false when referenced feature is disabled" do
+      feature.enable Flipper.feature_enabled(:search_beta)
+
+      expect(feature.enabled?).to be(false)
+    end
+
+    it "passes actor through to referenced feature" do
+      flipper.enable_actor(:search_beta, pitt)
+      feature.enable Flipper.feature_enabled(:search_beta)
+
+      expect(feature.enabled?(pitt)).to be(true)
+      expect(feature.enabled?(clooney)).to be(false)
+    end
+
+    it "returns false on circular dependency" do
+      feature.enable Flipper.feature_enabled(:other)
+      flipper[:other].enable Flipper.feature_enabled(:search)
+
+      expect(feature.enabled?).to be(false)
+    end
+
+    it "returns false on self-reference" do
+      feature.enable Flipper.feature_enabled(:search)
+
+      expect(feature.enabled?).to be(false)
+    end
+
+    it "cleans up thread-local state after evaluation" do
+      flipper.enable(:search_beta)
+      feature.enable Flipper.feature_enabled(:search_beta)
+
+      feature.enabled?
+      evaluating = Thread.current[:flipper_evaluating_features]
+      expect(evaluating.nil? || evaluating.empty?).to be(true)
+    end
+
+    it "cleans up thread-local state after self-reference" do
+      feature.enable Flipper.feature_enabled(:search)
+
+      feature.enabled?
+      evaluating = Thread.current[:flipper_evaluating_features]
+      expect(evaluating.nil? || evaluating.empty?).to be(true)
+    end
+
+    it "cleans up thread-local state after circular dependency" do
+      feature.enable Flipper.feature_enabled(:other)
+      flipper[:other].enable Flipper.feature_enabled(:search)
+
+      feature.enabled?
+      evaluating = Thread.current[:flipper_evaluating_features]
+      expect(evaluating.nil? || evaluating.empty?).to be(true)
+    end
+  end
+
+  context "for FeatureDisabled" do
+    before do
+      @original_instance = Flipper.instance
+      Flipper.instance = flipper
+    end
+
+    after do
+      Flipper.instance = @original_instance
+      Thread.current[:flipper_evaluating_features] = nil
+    end
+
+    it "returns true when referenced feature is disabled" do
+      feature.enable Flipper.feature_disabled(:old_checkout)
+
+      expect(feature.enabled?).to be(true)
+    end
+
+    it "returns false when referenced feature is enabled" do
+      flipper.enable(:old_checkout)
+      feature.enable Flipper.feature_disabled(:old_checkout)
+
+      expect(feature.enabled?).to be(false)
+    end
+  end
+
+  context "for FeatureEnabled composed with other expressions" do
+    before do
+      @original_instance = Flipper.instance
+      Flipper.instance = flipper
+    end
+
+    after do
+      Flipper.instance = @original_instance
+      Thread.current[:flipper_evaluating_features] = nil
+    end
+
+    it "works with Any" do
+      feature.enable Flipper.any(
+        Flipper.feature_enabled(:beta_program),
+        Flipper.property(:plan).eq("basic")
+      )
+
+      expect(feature.enabled?(basic_plan_actor)).to be(true)
+      expect(feature.enabled?(premium_plan_actor)).to be(false)
+
+      flipper.enable(:beta_program)
+      expect(feature.enabled?(premium_plan_actor)).to be(true)
+    end
+
+    it "works with All" do
+      flipper.enable(:basic_search)
+      feature.enable Flipper.all(
+        Flipper.feature_enabled(:basic_search),
+        Flipper.property(:plan).eq("basic")
+      )
 
       expect(feature.enabled?(basic_plan_actor)).to be(true)
       expect(feature.enabled?(premium_plan_actor)).to be(false)

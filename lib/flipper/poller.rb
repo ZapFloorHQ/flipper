@@ -2,11 +2,10 @@ require 'logger'
 require 'concurrent/utility/monotonic_time'
 require 'concurrent/map'
 require 'concurrent/atomic/atomic_fixnum'
-require 'concurrent/atomic/atomic_boolean'
 
 module Flipper
   class Poller
-    attr_reader :adapter, :thread, :pid, :mutex, :interval, :last_synced_at
+    attr_reader :adapter, :thread, :interval, :last_synced_at
 
     def self.instances
       @instances ||= Concurrent::Map.new
@@ -18,7 +17,10 @@ module Flipper
     end
 
     def self.reset
-      instances.each {|_, instance| instance.stop }.clear
+      instances.each do |_, instance|
+        instance.stop
+        instance.thread&.join(1)
+      end.clear
     end
 
     MINIMUM_POLL_INTERVAL = 10
@@ -30,8 +32,9 @@ module Flipper
       @instrumenter = options.fetch(:instrumenter, Instrumenters::Noop)
       @remote_adapter = options.fetch(:remote_adapter)
       @last_synced_at = Concurrent::AtomicFixnum.new(0)
+      @synced_at = 0
       @adapter = Adapters::Memory.new(nil, threadsafe: true)
-      @shutdown_requested = Concurrent::AtomicBoolean.new(false)
+      @shutdown_requested = false
 
       self.interval = options.fetch(:interval, 10)
       @initial_interval = @interval
@@ -44,9 +47,16 @@ module Flipper
     end
 
     def start
-      reset if forked?
-      return if @shutdown_requested.true?
+      # Fast path: Poll calls this on every adapter read.
+      return if @thread && @thread.alive?
       ensure_worker_running
+    end
+
+    # Internal: The monotonic time of the last successful sync, or 0. Same as
+    # last_synced_at.value but readable without a lock, since Poll checks it
+    # on every adapter read.
+    def synced_at
+      @synced_at
     end
 
     def stop
@@ -59,6 +69,11 @@ module Flipper
     def run
       loop do
         sleep jitter
+
+        # Poll syncs on boot when the local adapter is empty. Wait out the
+        # rest of the interval so that sync and this one stay an interval apart.
+        remaining = interval - (Concurrent.monotonic_time - @synced_at)
+        sleep remaining if remaining > 0
 
         begin
           sync
@@ -74,7 +89,9 @@ module Flipper
       @instrumenter.instrument("poller.#{InstrumentationNamespace}", operation: :poll) do
         begin
           @adapter.import @remote_adapter
-          @last_synced_at.update { |time| Concurrent.monotonic_time }
+          now = Concurrent.monotonic_time
+          @last_synced_at.update { now }
+          @synced_at = now
         ensure
           apply_response_headers
         end
@@ -95,14 +112,10 @@ module Flipper
 
     private
 
+    # Spreads out polls from processes that started together. Grows with the
+    # interval, capped at 30 seconds.
     def jitter
-      # Cap jitter at 30 seconds to prevent excessive delays for large intervals
-      max_jitter = [interval * 0.1, 30].min
-      rand * max_jitter
-    end
-
-    def forked?
-      pid != Process.pid
+      rand * [interval * 0.1, 30].min
     end
 
     def ensure_worker_running
@@ -111,16 +124,19 @@ module Flipper
 
       # If another thread is starting worker thread, then return early so this
       # thread can enqueue and move on with life.
-      return unless mutex.try_lock
+      return unless @mutex.try_lock
 
       begin
+        reset_if_forked
+        return if @shutdown_requested
         return if thread_alive?
         @thread = Thread.new { run }
+        @thread&.report_on_exception = false
         @instrumenter.instrument("poller.#{InstrumentationNamespace}", {
           operation: :thread_start,
         })
       ensure
-        mutex.unlock
+        @mutex.unlock
       end
     end
 
@@ -128,10 +144,18 @@ module Flipper
       @thread && @thread.alive?
     end
 
-    def reset
+    def reset_if_forked
+      return if @pid == Process.pid
+
       @pid = Process.pid
-      @shutdown_requested.make_false
-      mutex.unlock if mutex.locked?
+      @shutdown_requested = false
+    end
+
+    def request_shutdown
+      @mutex.synchronize do
+        reset_if_forked
+        @shutdown_requested = true
+      end
     end
 
     def apply_response_headers
@@ -140,7 +164,7 @@ module Flipper
       if response = @remote_adapter.last_get_all_response
         # shutdown based on response header
         if Flipper::Typecast.to_boolean(response["poll-shutdown"])
-          @shutdown_requested.make_true
+          request_shutdown
           @instrumenter.instrument("poller.#{InstrumentationNamespace}", {
             operation: :shutdown_requested,
           })

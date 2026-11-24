@@ -18,6 +18,8 @@ module Flipper
         :get_all,
         :enable,
         :disable,
+        :sync_version,
+        :sync_version=,
       ].freeze
 
       attr_reader :adapter
@@ -36,6 +38,11 @@ module Flipper
             wrap(method, *args) { @adapter.public_send(method, *args) }
           end
         end
+      end
+
+      # Wrapping an adapter doesn't make it writable.
+      def read_only?
+        @adapter.read_only?
       end
 
       # Override this method to customize the behavior of all delegated methods, and just yield to

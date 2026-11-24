@@ -1,5 +1,7 @@
 require "flipper/feature"
 require "flipper/gate_values"
+require "flipper/adapters/actor_limit"
+require "flipper/adapters/strict"
 require "flipper/adapters/sync/feature_synchronizer"
 
 module Flipper
@@ -27,14 +29,37 @@ module Flipper
 
         # Public: Forces a sync.
         def call
-          @instrumenter.instrument("synchronizer_call.flipper") { sync }
+          @instrumenter.instrument("synchronizer_call.flipper") do
+            Flipper::Adapters::Strict.with_sync_mode do
+              Flipper::Adapters::ActorLimit.with_sync_mode { sync }
+            end
+          end
         end
 
         private
 
         def sync
-          local_get_all = @local.get_all
           remote_get_all = @remote.get_all(cache_bust: @cache_bust)
+
+          # Never replace flags with older ones from a stale remote response.
+          remote_version = @remote.sync_version
+          local_version = @local.sync_version if remote_version
+          if remote_version&.older_than?(local_version)
+            @instrumenter.instrument("synchronizer_stale.flipper", {
+              local_version: local_version,
+              remote_version: remote_version,
+            })
+            return
+          end
+
+          # Record before writing flags so a concurrent sync of older flags
+          # into a shared adapter sees this version as soon as possible.
+          # Flipper::Cloud::SharedMemory#reload copies again for this reason.
+          if remote_version && remote_version != local_version
+            @local.sync_version = remote_version
+          end
+
+          local_get_all = @local.get_all
 
           # Sync all the gate values.
           remote_get_all.each do |feature_key, remote_gates_hash|

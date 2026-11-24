@@ -1,4 +1,5 @@
 require "rack/utils"
+require "flipper/typecast"
 
 module Flipper
   module UI
@@ -14,16 +15,16 @@ module Flipper
         Rack::Utils.unescape(str)
       end
 
+      def self.normalize_feature_name(str)
+        Typecast.to_feature_name(str)
+      end
+
       def self.blank?(str)
         str.to_s !~ NON_WHITESPACE_REGEXP
       end
 
       def self.present?(str)
         !blank?(str)
-      end
-
-      def self.titleize(str)
-        str.to_s.split('_').map(&:capitalize).join(' ')
       end
 
       def self.truncate(str, length: 30)

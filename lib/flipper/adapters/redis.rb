@@ -39,6 +39,7 @@ module Flipper
 
       # Public: Adds a feature to the set of known features.
       def add(feature)
+        ensure_not_reserved_key!(feature)
         if redis_sadd_returns_boolean?
           with_connection { |conn| conn.sadd? features_key, feature.key }
         else
@@ -54,12 +55,14 @@ module Flipper
         else
           with_connection { |conn| conn.srem features_key, feature.key }
         end
-        with_connection { |conn| conn.del key_for(feature.key) }
+        # Removing a reserved name left in the list must not delete the list.
+        with_connection { |conn| conn.del key_for(feature.key) } unless reserved_key?(feature)
         true
       end
 
       # Public: Clears the gate values for a feature.
       def clear(feature)
+        ensure_not_reserved_key!(feature)
         with_connection { |conn| conn.del key_for(feature.key) }
         true
       end
@@ -81,6 +84,17 @@ module Flipper
         read_many_features(features)
       end
 
+      # Public: The Flipper::SyncVersion of the flags last synced into this
+      # adapter, shared by every process using the same Redis.
+      def sync_version
+        SyncVersion.parse(with_connection { |conn| conn.get(sync_version_key) })
+      end
+
+      # Public: Records the Flipper::SyncVersion of the flags just synced.
+      def sync_version=(version)
+        with_connection { |conn| conn.set(sync_version_key, version.to_s) }
+      end
+
       # Public: Enables a gate for a given thing.
       #
       # feature - The Flipper::Feature for the gate.
@@ -89,6 +103,7 @@ module Flipper
       #
       # Returns true.
       def enable(feature, gate, thing)
+        ensure_not_reserved_key!(feature)
         feature_key = key_for(feature.key)
         case gate.data_type
         when :boolean
@@ -115,6 +130,7 @@ module Flipper
       #
       # Returns true.
       def disable(feature, gate, thing)
+        ensure_not_reserved_key!(feature)
         feature_key = key_for(feature.key)
         case gate.data_type
         when :boolean
@@ -133,6 +149,24 @@ module Flipper
       end
 
       private
+
+      # Private: The feature list and sync version live at keys next to the
+      # feature data, so a feature with the same key would overwrite or
+      # delete them.
+      def reserved_key?(feature)
+        Flipper.reserved_key?(feature.key) || key_for(feature.key) == features_key
+      end
+
+      def ensure_not_reserved_key!(feature)
+        super
+        return unless key_for(feature.key) == features_key
+
+        raise ArgumentError, "#{feature.key.inspect} is reserved by the Redis adapter and cannot be used as a feature name"
+      end
+
+      def sync_version_key
+        key_for(SyncVersion::KEY)
+      end
 
       def redis_sadd_returns_boolean?
         @sadd_returns_boolean

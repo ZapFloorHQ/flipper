@@ -13,14 +13,13 @@ Gem::Specification.new do |gem|
   gem.license       = 'MIT'
   gem.homepage      = 'https://www.flippercloud.io/docs/adapters/rollout'
 
-  gem.files         = `git ls-files`.split("\n").select(&flipper_rollout_files) + ['lib/flipper/version.rb']
-  gem.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n").select(&flipper_rollout_files)
+  gem.files         = `git ls-files -- lib`.split("\n").select(&flipper_rollout_files) + ['lib/flipper/version.rb']
   gem.name          = 'flipper-rollout'
   gem.require_paths = ['lib']
   gem.version       = Flipper::VERSION
   gem.metadata      = Flipper::METADATA
 
   gem.add_dependency 'flipper', "~> #{Flipper::VERSION}"
-  gem.add_dependency 'redis', '>= 2.2', '< 5'
+  gem.add_dependency 'redis', '>= 2.2', '< 7'
   gem.add_dependency 'rollout', "~> 2.0"
 end

@@ -1,10 +1,11 @@
 require 'flipper/cloud'
 require 'flipper/adapters/instrumented'
 require 'flipper/instrumenters/memory'
+require 'flipper/adapters/operation_logger'
 
 RSpec.describe Flipper::Cloud do
   before do
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
   end
 
   context "initialize with token" do
@@ -16,6 +17,10 @@ RSpec.describe Flipper::Cloud do
 
     it 'returns Flipper::DSL instance' do
       expect(@instance).to be_instance_of(Flipper::Cloud::DSL)
+    end
+
+    it 'preloads, because reads go to the local adapter' do
+      expect(@instance.preload?).to be(true)
     end
 
     it 'can read the cloud configuration' do
@@ -43,7 +48,7 @@ RSpec.describe Flipper::Cloud do
 
   context 'initialize with token and options' do
     it 'sets correct url' do
-      stub_request(:any, %r{fakeflipper.com}).to_return(status: 200)
+      stub_request(:any, %r{fakeflipper.com}).to_return
       instance = described_class.new(token: 'asdf', url: 'https://www.fakeflipper.com/sadpanda')
       # pardon the nesting...
       memoized = instance.adapter
@@ -110,7 +115,7 @@ RSpec.describe Flipper::Cloud do
 
   it 'can import' do
     stub_request(:post, /www\.flippercloud\.io\/adapter\/features.*/).
-      with(headers: {'flipper-cloud-token'=>'asdf'}).to_return(status: 200, body: "{}", headers: {})
+      with(headers: {'flipper-cloud-token'=>'asdf'}).to_return(body: "{}")
 
     flipper = Flipper.new(Flipper::Adapters::Memory.new)
 
@@ -182,5 +187,71 @@ RSpec.describe Flipper::Cloud do
     expect(flipper.adapter.get_all).to eq(get_all)
     expect { cloud_flipper.import(flipper) }.to raise_error(Net::OpenTimeout)
     expect(flipper.adapter.get_all).to eq(get_all)
+  end
+
+  describe ".set_default" do
+    around do |example|
+      original_token = ENV["FLIPPER_CLOUD_TOKEN"]
+      ENV["FLIPPER_CLOUD_TOKEN"] = "asdf"
+      example.run
+    ensure
+      ENV["FLIPPER_CLOUD_TOKEN"] = original_token
+      Flipper.instance = nil
+      Flipper.configuration = nil
+    end
+
+    it "serves every thread from one Memory filled once from the local adapter" do
+      # On a slow runner, the poller's first Cloud fetch or the boot copy's
+      # recopy a second later can land before the checks below. Both have
+      # their own specs, so keep them out of this one.
+      allow_any_instance_of(Flipper::Poller).to receive(:start)
+      stub_const("Flipper::Cloud::SharedMemory::RECOPY_INTERVAL", 3600)
+
+      database = Flipper::Adapters::Memory.new
+      Flipper.new(database).enable(:search)
+      stores = Queue.new
+      Flipper.configure do |config|
+        config.adapter do
+          Flipper::Adapters::OperationLogger.new(database).tap { |store| stores << store }
+        end
+      end
+      described_class.set_default
+
+      instances = 2.times.map { Thread.new { Flipper.instance }.value }
+      logged = Array.new(stores.size) { stores.pop }
+      expect(logged.sum { |store| store.count(:get_all) }).to eq(1)
+
+      logged.each(&:reset)
+      instances.each { |instance| expect(instance.enabled?(:search)).to be(true) }
+      expect(logged.sum { |store| store.operations.size }).to eq(0)
+
+      memories = instances.map { |instance| instance.cloud_configuration.instance_variable_get(:@memory) }
+      expect(memories.uniq.size).to eq(1)
+      expect(memories.first).to be_a(Flipper::Cloud::SharedMemory)
+    end
+
+    it "reads the local adapter when FLIPPER_CLOUD_MEMORY_READS is false" do
+      database = Flipper::Adapters::Memory.new
+      Flipper.new(database).enable(:search)
+      store = Flipper::Adapters::OperationLogger.new(database)
+      Flipper.configure { |config| config.adapter { store } }
+      ENV["FLIPPER_CLOUD_MEMORY_READS"] = "false"
+      described_class.set_default
+
+      expect(Flipper.instance.cloud_configuration.memory_reads?).to be(false)
+      expect(Flipper.instance.preload?).to be(true)
+      store.reset
+      expect(Flipper.instance.enabled?(:search)).to be(true)
+      expect(store.count(:get)).to eq(1)
+    ensure
+      ENV.delete("FLIPPER_CLOUD_MEMORY_READS")
+    end
+
+    it "passes more options from the block to each instance" do
+      instrumenter = Flipper::Instrumenters::Memory.new
+      described_class.set_default { { instrumenter: instrumenter } }
+
+      expect(Flipper.instance.instrumenter.instrumenter).to be(instrumenter)
+    end
   end
 end

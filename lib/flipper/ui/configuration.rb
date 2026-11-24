@@ -45,6 +45,11 @@ module Flipper
       # false and it will go away. Defaults to true.
       attr_accessor :cloud_recommendation
 
+      # Public: Set to false to disable the version check that fetches the
+      # latest release from flippercloud.io. Useful when a strict Content
+      # Security Policy is in place. Defaults to true.
+      attr_accessor :version_check_enabled
+
       # Public: What should show up in the form to add actors. This can be
       # different per application since flipper_id's can be whatever an
       # application needs. Defaults to "a flipper id".
@@ -77,6 +82,20 @@ module Flipper
       # Default is false.
       attr_accessor :confirm_disable
 
+      # Public: Set to disable the Fully Enable button in the UI, preventing
+      # users from fully enabling features via the web interface. Set to true
+      # for a default message, or a string for a custom message. Defaults to nil.
+      #
+      # Note: This only affects the UI. If flipper-api is mounted, full enable
+      # is still possible via the API.
+      #
+      # Examples:
+      #
+      #   config.disable_fully_enable = true
+      #   config.disable_fully_enable = "Use deploy pipeline instead."
+      #
+      attr_accessor :disable_fully_enable
+
       VALID_BANNER_CLASS_VALUES = %w(
         danger
         dark
@@ -90,6 +109,7 @@ module Flipper
 
       DEFAULT_DESCRIPTIONS_SOURCE = ->(_keys) { {} }
       DEFAULT_ACTOR_NAMES_SOURCE = ->(_keys) { {} }
+      DEFAULT_DISABLE_FULLY_ENABLE_MESSAGE = "Fully enabling features via the UI is disabled."
 
       def initialize
         @delete = Option.new("Danger Zone", "Deleting a feature removes it from the list of features and disables it for everyone.")
@@ -99,6 +119,7 @@ module Flipper
         @feature_removal_enabled = true
         @fun = true
         @cloud_recommendation = true
+        @version_check_enabled = true
         @add_actor_placeholder = "a flipper id"
         @descriptions_source = DEFAULT_DESCRIPTIONS_SOURCE
         @actor_names_source = DEFAULT_ACTOR_NAMES_SOURCE
@@ -106,6 +127,7 @@ module Flipper
         @actors_separator = ','
         @confirm_fully_enable = false
         @confirm_disable = true
+        @disable_fully_enable = nil
         @read_only = false
         @nav_items = [
           { title: "Features", href: "features" },
@@ -121,12 +143,25 @@ module Flipper
         using_descriptions? && @show_feature_description_in_list
       end
 
+      def disable_fully_enable_message
+        if @disable_fully_enable.is_a?(String)
+          @disable_fully_enable
+        else
+          DEFAULT_DISABLE_FULLY_ENABLE_MESSAGE
+        end
+      end
+
       def banner_class=(value)
+        @banner_class = self.class.validate_banner_class(value)
+      end
+
+      # Internal: Returns value, or raises if it isn't a valid banner class.
+      def self.validate_banner_class(value)
         unless VALID_BANNER_CLASS_VALUES.include?(value)
           raise InvalidConfigurationValue, "The banner_class provided '#{value}' is " \
             "not one of: #{VALID_BANNER_CLASS_VALUES.join(', ')}"
         end
-        @banner_class = value
+        value
       end
     end
   end

@@ -48,11 +48,14 @@ module Flipper
         update_timer "flipper.feature_operation.#{operation}"
 
         if @payload[:operation] == :enabled?
+          # Named instances get their own namespace, e.g.
+          # flipper.cross_app.feature.chat.enabled.
+          namespace = @payload[:instance] ? "flipper.#{@payload[:instance]}" : "flipper"
           metric_name =
             if result
-              "flipper.feature.#{feature_name}.enabled"
+              "#{namespace}.feature.#{feature_name}.enabled"
             else
-              "flipper.feature.#{feature_name}.disabled"
+              "#{namespace}.feature.#{feature_name}.disabled"
             end
 
           update_counter metric_name
@@ -72,6 +75,22 @@ module Flipper
       end
 
       def update_synchronizer_call_metrics
+        # noop
+      end
+
+      def update_synchronizer_exception_metrics
+        # noop
+      end
+
+      def update_synchronizer_stale_metrics
+        # noop
+      end
+
+      def update_telemetry_error_metrics
+        # noop
+      end
+
+      def update_telemetry_retry_metrics
         # noop
       end
 

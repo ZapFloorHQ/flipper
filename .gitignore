@@ -24,3 +24,5 @@ bin
 .tool-versions
 tags
 node_modules
+.claude
+.worktrees/

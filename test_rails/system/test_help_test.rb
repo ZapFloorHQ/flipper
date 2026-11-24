@@ -30,14 +30,18 @@ end
 
 class TestHelpTest < ActionDispatch::SystemTestCase
   # Any driver that runs the app in a separate thread will test what we want here.
-  driven_by :cuprite, options: { process_timeout: 60 }
+  # process_timeout covers browser boot; timeout covers each browser command
+  # (default 5s), which slow CI runners occasionally exceed.
+  driven_by :cuprite, options: { process_timeout: 60, timeout: 30 }
 
   setup do
     # Reconfigure Flipper since other tests change the adapter.
     flipper_configure
 
-    # Ensure this test uses this app instance
+    # Other Rails tests mutate Rails.application. start_application rebuilds
+    # Capybara.app from the restored app, so visit("/") hits this test app.
     Rails.application = TestApp.instance
+    ActionDispatch::SystemTestCase.start_application
   end
 
   test "configures a shared adapter between tests and app" do

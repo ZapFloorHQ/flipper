@@ -21,6 +21,13 @@ Rails.application.configure do
   ## Reconfigure Flipper to use the Memory adapter and disable Cloud in tests
   # config.flipper.test_help = true
 
+  ## Flipper Cloud is built into this gem. Set FLIPPER_CLOUD_TOKEN (or
+  ## `flipper: cloud_token:` in credentials) and Flipper syncs with Cloud.
+  ## New to Cloud? `bundle exec flipper cloud migrate` uploads your features and
+  ## gives you a link to sign up. Already have a Cloud project? Run
+  ## `bundle exec flipper cloud push` and paste your token to import them there.
+  ## For more info, see https://www.flippercloud.io/docs/guides/migration
+  ##
   ## The path that Flipper Cloud will use to sync features
   # config.flipper.cloud_path = "_flipper"
 

@@ -25,6 +25,13 @@ RSpec.describe Flipper::Adapters::Mongo do
   end
 
   it_should_behave_like 'a flipper adapter'
+  it_should_behave_like 'an adapter that stores its sync version'
+  it_should_behave_like 'an adapter that protects its feature list' do
+    let(:add_reserved_name_to_list) do
+      collection.find(_id: "flipper_features").update_one({ "$addToSet" => { "features" => "flipper_features" } })
+    end
+  end
+  it_should_behave_like 'an adapter that protects its sync version key'
 
   it 'configures itself on load' do
     Flipper.configuration = nil
@@ -34,5 +41,11 @@ RSpec.describe Flipper::Adapters::Mongo do
 
     ENV["MONGO_URL"] = ENV.fetch("MONGO_URL", "mongodb://127.0.0.1:27017/testing")
     expect(Flipper.adapter.adapter).to be_a(Flipper::Adapters::Mongo)
+
+    client = Flipper.adapter.adapter.collection.client
+    expect(Thread.new { Flipper.adapter.adapter.collection.client }.value).to be(client)
+
+    allow(Process).to receive(:pid).and_return(Process.pid + 1)
+    expect(Thread.new { Flipper.adapter.adapter.collection.client }.value).not_to be(client)
   end
 end

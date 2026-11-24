@@ -1,6 +1,6 @@
-[![Flipper Mark](docs/images/banner.jpg)](https://www.flippercloud.io)
+[![Flipper Mark](https://raw.githubusercontent.com/flippercloud/flipper/main/docs/images/banner.jpg)](https://www.flippercloud.io)
 
-[Website](https://flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=website_link) | [Documentation](https://flippercloud.io/docs?utm_source=oss&utm_medium=readme&utm_campaign=docs_link) | [Examples](examples) | [Chat](https://chat.flippercloud.io/join/xjHq-aJsA-BeZH) | [Twitter](https://twitter.com/flipper_cloud) | [Ruby.social](https://ruby.social/@flipper)
+[Website](https://flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=website_link) | [Documentation](https://flippercloud.io/docs?utm_source=oss&utm_medium=readme&utm_campaign=docs_link) | [Examples](https://github.com/flippercloud/flipper/tree/main/examples) | [Chat](https://chat.flippercloud.io/join/xjHq-aJsA-BeZH) | [Twitter](https://twitter.com/flipper_cloud) | [Ruby.social](https://ruby.social/@flipper)
 
 # Flipper
 
@@ -11,11 +11,31 @@ Flipper gives you control over who has access to features in your app.
 - Enable or disable features for everyone, specific actors, groups of actors, a percentage of actors, or a percentage of time.
 - Configure your feature flags from the console or a web UI.
 - Regardless of what data store you are using, Flipper can performantly store your feature flags.
-- Use [Flipper Cloud](#flipper-cloud) to cascade features from multiple environments, share settings with your team, control permissions, keep an audit history, and rollback.
+- Use [Flipper Cloud](#flipper-cloud) to cascade features from multiple environments, share settings with your team, control permissions, keep an audit history, rollback, and let AI assistants find flags ready to remove.
 
 Control your software &mdash; don't let it control you.
 
 ## Installation
+
+### Rails
+
+```
+bundle add flipper-active_record
+bin/rails g flipper:setup
+bin/rails db:migrate
+```
+
+`flipper-active_record` brings in `flipper` and stores your features in your database. `flipper:setup` creates `config/initializers/flipper.rb` and the migration. Prefer Redis, Sequel, or something else? Pick another [adapter](https://flippercloud.io/docs/adapters). Add [`flipper-ui`](https://flippercloud.io/docs/ui) for a web UI.
+
+To move your features to [Flipper Cloud](#flipper-cloud) later (free plan, no token needed to start):
+
+```
+bundle exec flipper cloud migrate
+```
+
+Cloud support is built into the `flipper` gem; the separate `flipper-cloud` gem is deprecated.
+
+### Other Ruby apps
 
 Add this line to your application's Gemfile:
 
@@ -23,7 +43,7 @@ Add this line to your application's Gemfile:
 
 You'll also want to pick a storage [adapter](https://flippercloud.io/docs/adapters), for example:
 
-    gem 'flipper-active_record'
+    gem 'flipper-redis'
 
 And then execute:
 
@@ -35,7 +55,11 @@ Or install it yourself with:
 
 ## Subscribe &amp; Ship
 
-[💌 &nbsp;Subscribe](https://blog.flippercloud.io/#/portal/signup) - we'll send you short and sweet emails when we release new versions ([examples](https://blog.flippercloud.io/tag/releases/)).
+[💌 &nbsp;Subscribe](https://www.flippercloud.io/newsletter) - we'll send you short and sweet emails when we release new versions ([examples](https://www.flippercloud.io/blog/tag/releases)).
+
+## Merch
+
+Do you deploy on Fridays? [👕 Get the tee](https://shop.verygoodsoftware.company/product/i-deploy-on-fridays-tee?utm_source=oss&utm_medium=readme&utm_campaign=merch).
 
 ## Getting Started
 
@@ -68,21 +92,57 @@ Flipper.enable_percentage_of_actors :search, 2
 
 Read more about [getting started with Flipper](https://flippercloud.io/docs?utm_source=oss&utm_medium=readme&utm_campaign=getting_started) and [enabling features](https://flippercloud.io/docs/features?utm_source=oss&utm_medium=readme&utm_campaign=enabling_features).
 
+## Named Instances
+
+Need a second, independent set of flags in the same app, such as flags shared across
+several apps? Declare a named instance with its own adapter (and optionally its own
+Flipper Cloud project). The top-level `Flipper` is unchanged.
+
+```ruby
+# config/initializers/flipper.rb
+Flipper.configure do |config|
+  config.named(:cross_app) do |cross_app|
+    cross_app.adapter { Flipper::Adapters::ActiveRecord.new(table_prefix: "cross_app_") }
+    cross_app.cloud(path: "_flipper/cross_app") # optional; uses FLIPPER_CLOUD_CROSS_APP_TOKEN
+  end
+end
+
+CrossAppFlipper = Flipper.named(:cross_app)
+CrossAppFlipper.enabled?(:chat_in_topbar, current_user)
+```
+
+Read the [named instances guide](https://www.flippercloud.io/docs/guides/named-instances?utm_source=oss&utm_medium=readme&utm_campaign=named_instances) for Active Record tables, groups, Cloud credentials, the UI, instrumentation and testing.
+
 ## Flipper Cloud
 
 Like Flipper and want more? Check out [Flipper Cloud](https://www.flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=check_out), which comes with:
 
-- **multiple environments** &mdash; production, staging, per continent, whatever you need. Every environment inherits from production by default and every project comes with a [project overview page](https://blog.flippercloud.io/project-overview/) that shows each feature and its status in each environment.
+- **multiple environments** &mdash; production, staging, per continent, whatever you need. Every environment inherits from production by default and every project comes with a [project overview page](https://www.flippercloud.io/blog/project-overview) that shows each feature and its status in each environment.
 - **personal environments** &mdash; everyone on your team gets a personal environment (that inherits from production) which they can modify however they want without stepping on anyone else's toes.
 - **permissions** &mdash; grant access to everyone in your organization or lockdown each project to particular people. You can even limit access to a particular environment (like production) to specific people.
 - **audit history** &mdash; every feature change and who made it.
 - **rollbacks** &mdash; enable or disable a feature accidentally? No problem. You can roll back to any point in the audit history with a single click.
-- **maintenance** &mdash; we'll keep the lights on for you. We also have handy webhooks and background polling for keeping your app in sync with Cloud, so **our availability won't affect yours**. All your feature flag reads are local to your app.
+- **MCP server** &mdash; connect Claude Code, Codex, Cursor, or any other AI assistant to your flags with our [MCP server](https://www.flippercloud.io/docs/cloud/mcp?utm_source=oss&utm_medium=readme&utm_campaign=mcp). Ask "Which Flipper flags can we remove?" and it checks every environment, your telemetry, and your audit history, then tells you which flags are done and why.
+- **maintenance** &mdash; we'll keep the lights on for you. We also have handy webhooks and background polling for keeping your app in sync with Cloud, so **our availability won't affect yours**. All your feature flag reads are served from memory in your app.
 - **everything in one place** &mdash; no need to bounce around from different application UIs or IRB consoles.
 
-[![Flipper Cloud Screenshot](docs/images/flipper_cloud.png)](https://www.flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=screenshot)
+[![Flipper Cloud Screenshot](https://raw.githubusercontent.com/flippercloud/flipper/main/docs/images/flipper_cloud.png)](https://www.flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=screenshot)
 
-Cloud is super simple to integrate with Rails ([demo app](https://github.com/fewerandfaster/flipper-rails-demo)), Sinatra or any other framework.
+Cloud is super simple to integrate with Rails ([demo app](https://github.com/flippercloud/flipper-rails-demo)), Sinatra or any other framework.
+
+### How Cloud reads work
+
+When Cloud is your default (`FLIPPER_CLOUD_TOKEN` is set, with Rails or `Flipper::Cloud.set_default`), feature checks are served from one Memory adapter that every thread in the process shares. Checking a feature doesn't query your adapter (ActiveRecord, Redis, etc.).
+
+- Memory is filled from your adapter when the process boots, so flags are there even if Cloud isn't reachable.
+- Changes you make in your app go to Cloud, your adapter, and that process's Memory. Other processes get them from Cloud like any other change, as described below.
+- **Polling** (the default): every process polls Cloud every 10 seconds, and each change is written to your adapter and Memory on the next feature check.
+- **Webhooks** (`FLIPPER_CLOUD_SYNC_SECRET` set): the process that gets the webhook updates your adapter and its Memory right away. Other processes reload Memory from your adapter every 10 seconds, and every process polls Cloud every 5 minutes in case a webhook is missed.
+- If your adapter is down, feature checks keep working from Memory. A sync that can't be written to your adapter is written again on the next sync.
+- Adapters added with `config.use` (like `Strict` and `ActorLimit`) still wrap reads and writes.
+- [Named instances](#named-instances) that call `cloud` read the same way, each from its own Memory.
+- `Flipper::Middleware::Memoizer` still memoizes each request but skips its `preload` option, since there are no adapter reads left to save.
+- To read from your adapter on every check instead, as before, set `FLIPPER_CLOUD_MEMORY_READS=false` and restart.
 
 We also have a [free plan](https://www.flippercloud.io?utm_source=oss&utm_medium=readme&utm_campaign=free_plan) that you can use forever.
 
@@ -90,16 +150,17 @@ We also have a [free plan](https://www.flippercloud.io?utm_source=oss&utm_medium
 
 1. Fork it
 2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Run the tests (`bundle exec rake`). Check out [Docker-Compose](docs/DockerCompose.md) if you need help getting all the adapters running.
+3. Run the tests (`bundle exec rake`). Check out [Docker-Compose](https://github.com/flippercloud/flipper/blob/main/docs/DockerCompose.md) if you need help getting all the adapters running.
 4. Commit your changes (`git commit -am 'Added some feature'`)
 5. Push to the branch (`git push origin my-new-feature`)
 6. Create new Pull Request
 
 ## Releasing
 
-1. Update the version to be whatever it should be and commit.
-2. `script/release`
-3. Create a new [GitHub Release](https://github.com/flippercloud/flipper/releases/new)
+1. Update the version in `lib/flipper/version.rb` and commit.
+2. Tag and push: `git tag v1.x.x && git push origin v1.x.x`
+3. GitHub Actions builds and publishes all gems to RubyGems automatically.
+4. Edit and publish the draft [GitHub Release](https://github.com/flippercloud/flipper/releases).
 
 ## Brought To You By
 

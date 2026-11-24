@@ -18,6 +18,13 @@ RSpec.describe Flipper::Adapters::Sync do
   end
 
   it_should_behave_like 'a flipper adapter'
+  it_should_behave_like 'an adapter that stores its sync version'
+
+  it 'keeps the sync version in the local adapter only' do
+    subject.sync_version = Flipper::SyncVersion.new("scope", 10)
+    expect(local_adapter.sync_version).to eq(subject.sync_version)
+    expect(remote_adapter.sync_version).to be_nil
+  end
 
   context 'when local has never been synced' do
     it 'syncs boolean' do
@@ -194,8 +201,11 @@ RSpec.describe Flipper::Adapters::Sync do
 
   it 'does not raise sync exceptions' do
     exception = StandardError.new
-    expect(remote_adapter).to receive(:get_all).and_raise(exception)
+    allow(remote_adapter).to receive(:get_all).and_raise(exception)
     expect { subject.get_all }.not_to raise_error
+    # The interval clock ticks in whole seconds, so `get_all` can sync a second
+    # time if it runs just after a second boundary. Only require that it synced.
+    expect(remote_adapter).to have_received(:get_all).at_least(:once)
   end
 
   describe '#adapter_stack' do

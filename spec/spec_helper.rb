@@ -32,11 +32,21 @@ RSpec.configure do |config|
   config.before(:example) do
     # default stub for telemetry
     stub_request(:post, "https://www.flippercloud.io/adapter/telemetry").
-      to_return(status: 200, body: "", headers: {})
+      to_return(body: "")
     Flipper::Cloud::Telemetry.reset if defined?(Flipper::Cloud::Telemetry) && Flipper::Cloud::Telemetry.respond_to?(:reset)
     Flipper::Poller.reset if defined?(Flipper::Poller)
     Flipper.unregister_groups
     Flipper.configuration = nil
+  end
+
+  config.after(:example) do
+    # Stop any pollers started during the test BEFORE WebMock clears stubs
+    # in its own after hook (RSpec runs after hooks in reverse registration
+    # order, so ours runs first since webmock/rspec was required before this).
+    Flipper::Poller.reset if defined?(Flipper::Poller)
+    # Stopping telemetry posts whatever metrics are left. Do it here so that
+    # post belongs to this example, not to the next one's request log.
+    Flipper::Cloud::Telemetry.reset if defined?(Flipper::Cloud::Telemetry) && Flipper::Cloud::Telemetry.respond_to?(:reset)
   end
 
   config.disable_monkey_patching!

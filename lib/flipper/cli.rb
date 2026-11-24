@@ -1,4 +1,7 @@
 require 'optparse'
+require 'bundler/vendored_thor'
+require 'bundler/ui/shell'
+require 'flipper/version'
 
 module Flipper
   class CLI < OptionParser
@@ -16,6 +19,7 @@ module Flipper
 
       # Program is always flipper, no matter how it's invoked
       @program_name = 'flipper'
+      self.version = Flipper::VERSION
       @require = ENV.fetch("FLIPPER_REQUIRE", DEFAULT_REQUIRE)
       @commands = {}
 
@@ -37,19 +41,19 @@ module Flipper
             values << Types::Group.new(name)
           end
           c.on('-p NUM', '--percentage-of-actors=NUM', Numeric, "#{action} for a percentage of actors") do |num|
-            values << Types::PercentageOfActors.new(num)
+            values << percentage(Types::PercentageOfActors, num)
           end
           c.on('-t NUM', '--percentage-of-time=NUM', Numeric, "#{action} for a percentage of time") do |num|
-            values << Types::PercentageOfTime.new(num)
+            values << percentage(Types::PercentageOfTime, num)
           end
-          c.on('-x expressions', '--expression=NUM', "#{action} for the given expression") do |expression|
+          c.on('-x expressions', '--expression=JSON', "#{action} for the given expression") do |expression|
             begin
               values << Flipper::Expression.build(JSON.parse(expression))
             rescue JSON::ParserError => e
               ui.error "JSON parse error #{e.message}"
               ui.trace(e)
               exit 1
-            rescue ArgumentError => e
+            rescue ArgumentError, NameError => e
               ui.error "Invalid expression: #{e.message}"
               ui.trace(e)
               exit 1
@@ -57,6 +61,7 @@ module Flipper
           end
 
           c.action do |feature|
+            usage_error!(c.help, "Missing feature name") unless feature
             f = Flipper.feature(feature)
 
             if values.empty?
@@ -78,15 +83,72 @@ module Flipper
       end
 
       command 'show' do |c|
+        c.banner = "Usage: #{c.program_name} [options] <feature>"
         c.description = "Show a defined feature"
         c.action do |feature|
+          usage_error!(c.help, "Missing feature name") unless feature
           ui.info feature_details(Flipper.feature(feature))
+        end
+      end
+
+      command 'export' do |c|
+        c.description = "Export features as JSON"
+        c.action do
+          export = Flipper.export(format: :json, version: 1)
+          ui.info export.contents
+        end
+      end
+
+      command 'cloud' do |c|
+        c.description = "Flipper Cloud commands"
+        c.banner = "Usage: #{c.program_name} <command>"
+        c.separator ""
+        c.separator "Commands:"
+        c.separator "  migrate  Migrate features to a new Flipper Cloud account"
+        c.separator "  push     Push features to an existing Flipper Cloud project (asks for the token)"
+        c.action do |subcommand = nil, *args|
+          require 'flipper/cloud/migrate'
+
+          case subcommand
+          when 'migrate'
+            result = Flipper::Cloud.migrate(Flipper)
+            if result.url
+              ui.info "Migrating to Flipper Cloud..."
+              ui.info "Open this URL in your browser to finish migrating your features:"
+              ui.info result.url
+            else
+              message = "Migration failed (HTTP #{result.code})"
+              message << ": #{result.message}" if result.message
+              ui.error message
+              exit 1
+            end
+          when 'push'
+            token = args.first || prompt_for_cloud_token
+            if token.to_s.empty?
+              ui.error "Usage: flipper cloud push [token]"
+              exit 1
+            end
+            result = Flipper::Cloud.push(token, Flipper)
+            if result.code == 204
+              ui.info "Successfully pushed features to Flipper Cloud"
+            else
+              message = "Push failed (HTTP #{result.code})"
+              message << ": #{result.message}" if result.message
+              ui.error message
+              exit 1
+            end
+          when nil
+            ui.info c.help
+          else
+            usage_error!(c.help, "Unknown command: cloud #{subcommand}")
+          end
         end
       end
 
       command 'help' do |c|
         c.load_environment = false
         c.action do |command = nil|
+          usage_error!(help, "Unknown command: #{command}") if command && !@commands[command]
           ui.info command ? @commands[command].help : help
         end
       end
@@ -98,6 +160,11 @@ module Flipper
       # Options available on all commands
       on_tail('-h', '--help', 'Print help message') do
         ui.info help
+        exit
+      end
+
+      on_tail('-v', '--version', 'Print version') do
+        ui.info ver
         exit
       end
 
@@ -118,18 +185,21 @@ module Flipper
     def run(argv)
       command, *args = order(argv)
 
-      if @commands[command]
-        load_environment! if @commands[command].load_environment
-        @commands[command].run(args)
+      if (cmd = @commands[command])
+        # Print help before loading the app, so it works outside one too.
+        if cmd.help_requested?(args)
+          ui.info cmd.help
+          exit
+        end
+
+        load_environment! if cmd.load_environment
+        cmd.run(args)
+      elsif command
+        usage_error!(help, "Unknown command: #{command}")
       else
         ui.info help
-
-        if command
-          ui.error "Unknown command: #{command}"
-          exit 1
-        end
       end
-    rescue OptionParser::InvalidOption => e
+    rescue OptionParser::ParseError => e
       ui.error e.message
       exit 1
     end
@@ -138,6 +208,32 @@ module Flipper
     def command(name, &block)
       @commands[name] = Command.new(program_name: "#{program_name} #{name}")
       block.call(@commands[name])
+    end
+
+    # Build a percentage type, reporting an out of range value as a bad argument.
+    def percentage(type, value)
+      type.new(value)
+    rescue ArgumentError => e
+      raise OptionParser::InvalidArgument, e.message
+    end
+
+    # Print usage to stdout, the error to stderr, and exit non-zero.
+    def usage_error!(usage, message)
+      ui.info usage
+      ui.error message
+      exit 1
+    end
+
+    # Ask for the Cloud token without echoing it, so it stays out of shell
+    # history and the process list. Returns nil when stdin isn't a terminal.
+    def prompt_for_cloud_token
+      return unless $stdin.tty?
+
+      require "io/console"
+      shell.stderr.print "Flipper Cloud token: "
+      token = $stdin.noecho(&:gets)
+      shell.stderr.puts
+      token&.strip
     end
 
     def load_environment!
@@ -257,6 +353,26 @@ module Flipper
 
       def action(&block)
         @action = block
+      end
+
+      # Whether argv asks for help: -h or --help before any --, and not the
+      # value of an option that takes one (enable -a --help is an actor).
+      # Abbreviated (--act) and bundled (-ah) options aren't followed.
+      def help_requested?(argv)
+        argv = argv.take_while { |arg| arg != "--" }
+
+        until argv.empty?
+          arg = argv.shift
+          return true if arg == "-h" || arg == "--help"
+
+          switch = case arg
+          when /\A--([^=]+)\z/ then search(:long, $1)
+          when /\A-(\w)\z/ then search(:short, $1)
+          end
+          argv.shift if switch.is_a?(OptionParser::Switch::RequiredArgument)
+        end
+
+        false
       end
     end
   end

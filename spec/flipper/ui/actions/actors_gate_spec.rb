@@ -129,6 +129,37 @@ RSpec.describe Flipper::UI::Actions::ActorsGate do
       end
     end
 
+    context "when the feature is at the actor limit" do
+      let(:flipper) { build_flipper(Flipper::Adapters::ActorLimit.new(build_memory_adapter, 2)) }
+
+      before do
+        flipper[:search].enable_actor Flipper::Actor.new('User;1')
+        flipper[:search].enable_actor Flipper::Actor.new('User;2')
+      end
+
+      it "redirects back to the form with the limit error" do
+        post 'features/search/actors',
+             { 'value' => 'User;3', 'operation' => 'enable', 'authenticity_token' => token },
+             'rack.session' => session
+
+        expect(last_response.status).to be(302)
+        location = URI(last_response.headers['location'])
+        expect(location.path).to eq('/features/search/actors')
+        expect(Rack::Utils.parse_query(location.query)['error']).to include('Actor limit of 2 exceeded')
+        expect(flipper[:search].actors_value).to eq(Set['User;1', 'User;2'])
+      end
+
+      it "still allows disabling actors" do
+        post 'features/search/actors',
+             { 'value' => 'User;1', 'operation' => 'disable', 'authenticity_token' => token },
+             'rack.session' => session
+
+        expect(last_response.status).to be(302)
+        expect(last_response.headers['location']).to eq('/features/search')
+        expect(flipper[:search].actors_value).to eq(Set['User;2'])
+      end
+    end
+
     context "when a readonly adapter is configured" do
       let(:value) { 'User;6' }
 
@@ -195,6 +226,22 @@ RSpec.describe Flipper::UI::Actions::ActorsGate do
               'rack.session' => session
           expect(flipper[:search].actors_value).not_to eq(Set.new(multi_value.split(',').map(&:strip)))
         end
+      end
+    end
+
+    context 'disabling an actor whose id contains the separator' do
+      let(:value) { 'OrderItem;[1, 2]' }
+
+      before do
+        flipper[:search].enable_actor Flipper::Actor.new(value)
+        flipper[:search].enable_actor Flipper::Actor.new('User;1')
+        post 'features/search/actors',
+             { 'value' => value, 'operation' => 'disable', 'authenticity_token' => token },
+             'rack.session' => session
+      end
+
+      it 'removes only that actor' do
+        expect(flipper[:search].actors_value).to eq(Set['User;1'])
       end
     end
   end

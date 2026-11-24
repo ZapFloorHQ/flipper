@@ -2,6 +2,8 @@ require 'rack/test'
 require 'active_support/cache'
 require 'flipper/adapters/active_support_cache_store'
 require 'flipper/adapters/operation_logger'
+require 'flipper/adapters/actor_limit'
+require 'flipper/adapters/sync'
 
 RSpec.describe Flipper::Middleware::Memoizer do
   include Rack::Test::Methods
@@ -124,17 +126,50 @@ RSpec.describe Flipper::Middleware::Memoizer do
       # clear the log of operations
       adapter.reset
 
+      results = []
       app = lambda do |_env|
-        flipper[:other].enabled?
-        flipper[:other].enabled?
+        results << flipper[:other].enabled?
+        results << flipper[:other].enabled?
         [200, {}, []]
       end
 
       middleware = described_class.new(app, preload: true)
       middleware.call(env)
 
+      expect(results).to eq([false, false])
+      expect(adapter.count(:get_all)).to eq(1)
+      expect(adapter.count(:get)).to eq(0)
+    end
+  end
+
+  context 'when the instance does not need preloading' do
+    before { allow(flipper).to receive(:preload?).and_return(false) }
+
+    it 'skips preload: true and still memoizes' do
+      flipper[:stats].enable
+      adapter.reset
+
+      app = lambda do |_env|
+        flipper[:stats].enabled?
+        flipper[:stats].enabled?
+        [200, {}, []]
+      end
+
+      described_class.new(app, preload: true).call(env)
+
+      expect(adapter.count(:get_all)).to be(0)
       expect(adapter.count(:get)).to be(1)
-      expect(adapter.last(:get).args).to eq([flipper[:other]])
+    end
+
+    it 'skips preloading specific features' do
+      adapter.reset
+      described_class.new(->(_env) { [200, {}, []] }, preload: %i(stats)).call(env)
+      expect(adapter.operations).to be_empty
+    end
+
+    it 'does not call a preload block' do
+      preload = ->(_request) { raise 'preload block called' }
+      described_class.new(->(_env) { [200, {}, []] }, preload: preload).call(env)
     end
   end
 
@@ -479,6 +514,38 @@ RSpec.describe Flipper::Middleware::Memoizer do
       get '/', {}, 'flipper' => flipper
       expect(logged_cached.count(:get_all)).to be(3)
       expect(logged_memory.count(:get_all)).to be(1)
+    end
+  end
+
+  context 'with preload:true and Sync adapter wrapped with ActorLimit' do
+    it 'preloads even when remote has more actors than local limit' do
+      local = Flipper::Adapters::Memory.new
+      remote = Flipper::Adapters::Memory.new
+      remote_flipper = Flipper.new(remote)
+
+      # Remote has more actors than limit allows (actor-only enables, not boolean)
+      10.times { |i| remote_flipper[:stats].enable_actor Flipper::Actor.new("User;#{i}") }
+
+      # Sync adapter will sync from remote to local, then ActorLimit wraps it
+      # Use interval: 0 to force sync on every call
+      sync_adapter = Flipper::Adapters::Sync.new(local, remote, interval: 0)
+      limited_adapter = Flipper::Adapters::ActorLimit.new(sync_adapter, 5)
+      test_flipper = Flipper.new(limited_adapter)
+
+      app = lambda do |env|
+        f = env['flipper']
+        f[:stats].enabled?
+        [200, {}, []]
+      end
+      middleware = described_class.new(app, preload: true)
+
+      # Preload should work without raising ActorLimit::LimitExceeded
+      expect {
+        middleware.call('flipper' => test_flipper)
+      }.not_to raise_error
+
+      # Verify actors were synced (all 10, not just 5)
+      expect(test_flipper[:stats].actors_value.size).to eq(10)
     end
   end
 end

@@ -14,10 +14,26 @@ module Flipper
         @errors = options.fetch(:errors, [StandardError])
       end
 
+      def read_only?
+        @adapter.read_only?
+      end
+
       def features
         @adapter.features
       rescue *@errors
         Set.new
+      end
+
+      def sync_version
+        @adapter.sync_version
+      rescue *@errors
+        nil
+      end
+
+      def sync_version=(version)
+        @adapter.sync_version = version
+      rescue *@errors
+        nil
       end
 
       def add(feature)

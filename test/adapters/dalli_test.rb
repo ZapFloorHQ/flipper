@@ -7,7 +7,7 @@ class DalliTest < MiniTest::Test
 
   def setup
     url = ENV.fetch('MEMCACHED_URL', 'localhost:11211')
-    @cache = Dalli::Client.new(url)
+    @cache = Dalli::Client.new(url, protocol: :meta)
     Dalli.logger = Logger.new('/dev/null')
     @cache.flush
     memory_adapter = Flipper::Adapters::Memory.new

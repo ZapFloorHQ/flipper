@@ -1,3 +1,5 @@
+require "open3"
+
 RSpec.describe Flipper::Api do
   describe 'Initializing middleware with flipper instance' do
     let(:app) { build_api(flipper) }
@@ -27,6 +29,33 @@ RSpec.describe Flipper::Api do
       head '/features'
 
       expect(last_response.status).to be(200)
+      expect(last_response.body).to be_empty
+    end
+  end
+
+  describe "Unsupported request methods" do
+    let(:app) { build_api(flipper) }
+
+    it "answer 405 with the methods the route allows" do
+      {
+        [:put, '/features/a'] => 'HEAD, GET, DELETE',
+        [:patch, '/features/a/boolean'] => 'POST, DELETE',
+        [:get, '/import'] => 'POST',
+        [:options, '/features'] => 'HEAD, GET, POST',
+      }.each do |(verb, path), allow|
+        send(verb, path)
+
+        expect(last_response.status).to eq(405), "#{verb} #{path}"
+        expect(last_response.headers['allow']).to eq(allow)
+        expect(json_response).to include('code' => 10, 'message' => 'Request method not allowed.')
+      end
+    end
+
+    it "answer 405 without a body for HEAD on a route without GET" do
+      head '/import'
+
+      expect(last_response.status).to eq(405)
+      expect(last_response.headers['allow']).to eq('POST')
       expect(last_response.body).to be_empty
     end
   end
@@ -126,5 +155,16 @@ RSpec.describe Flipper::Api do
     it 'returns a String' do
       expect(build_api(flipper).inspect).to eq("Flipper::Api")
     end
+  end
+
+  it "loads without Bundler, as in a plain Rack app" do
+    # RUBYLIB finds the bundled gems (CI installs them outside GEM_HOME)
+    # without loading Bundler, which would load pathname for us.
+    env = { "RUBYLIB" => $LOAD_PATH.join(File::PATH_SEPARATOR) }
+    _, stderr, status = Bundler.with_unbundled_env do
+      Open3.capture3(env, RbConfig.ruby, "-Ilib", "-e", "require 'flipper/api'", chdir: File.expand_path("../..", __dir__))
+    end
+
+    expect(status).to be_success, stderr
   end
 end

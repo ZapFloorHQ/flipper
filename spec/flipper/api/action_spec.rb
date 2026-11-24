@@ -28,40 +28,54 @@ RSpec.describe Flipper::Api::Action do
   end
 
   describe 'https verbs' do
-    it "won't run method that isn't whitelisted" do
-      fake_request = Struct.new(:request_method, :env, :session).new('NOOOOPE', {}, {})
+    it "answers 405 for a method that isn't whitelisted" do
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'NOOOOPE'))
       action = action_subclass.new(flipper, fake_request)
-      expect do
-        action.run
-      end.to raise_error(Flipper::Api::RequestMethodNotSupported)
+      status, headers, body = action.run
+      expect(status).to eq(405)
+      expect(headers['allow']).to eq('HEAD, GET, POST, PUT, DELETE')
+      expect(headers[Rack::CONTENT_TYPE]).to eq('application/json')
+      expect(JSON.parse(body[0])).to include('code' => 10, 'message' => 'Request method not allowed.')
+    end
+
+    it "answers 405 for a whitelisted method the action doesn't define" do
+      post_only = Class.new(described_class) do
+        def post
+          [200, {}, 'post']
+        end
+      end
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'GET'))
+      status, headers, = post_only.new(flipper, fake_request).run
+      expect(status).to eq(405)
+      expect(headers['allow']).to eq('POST')
     end
 
     it 'will run get' do
-      fake_request = Struct.new(:request_method, :env, :session).new('GET', {}, {})
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'GET'))
       action = action_subclass.new(flipper, fake_request)
       expect(action.run).to eq([200, {}, 'get'])
     end
 
     it 'will run head' do
-      fake_request = Struct.new(:request_method, :env, :session).new('HEAD', {}, {})
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'HEAD'))
       action = action_subclass.new(flipper, fake_request)
       expect(action.run).to eq([200, {}, 'get'])
     end
 
     it 'will run post' do
-      fake_request = Struct.new(:request_method, :env, :session).new('POST', {}, {})
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'POST'))
       action = action_subclass.new(flipper, fake_request)
       expect(action.run).to eq([200, {}, 'post'])
     end
 
     it 'will run put' do
-      fake_request = Struct.new(:request_method, :env, :session).new('PUT', {}, {})
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'PUT'))
       action = action_subclass.new(flipper, fake_request)
       expect(action.run).to eq([200, {}, 'put'])
     end
 
     it 'will run delete' do
-      fake_request = Struct.new(:request_method, :env, :session).new('DELETE', {}, {})
+      fake_request = Rack::Request.new(Rack::MockRequest.env_for('/', method: 'DELETE'))
       action = action_subclass.new(flipper, fake_request)
       expect(action.run).to eq([200, {}, 'delete'])
     end
@@ -105,6 +119,24 @@ RSpec.describe Flipper::Api::Action do
           expect { action.json_error_response(:invalid_error_key) }.to raise_error(KeyError)
         end
       end
+    end
+  end
+
+  describe 'safe parameters' do
+    it 'does not classify unrelated application errors as parameter errors' do
+      request = double('Request', request_method: 'GET')
+      allow(request).to receive(:params).and_raise(ArgumentError, 'application failure')
+      action = action_subclass.new(flipper, request)
+
+      expect { action.send(:safe_params) }.to raise_error(ArgumentError, 'application failure')
+    end
+
+    it 'does not classify unrelated range errors on modern Rack as parameter errors' do
+      request = double('Request', request_method: 'GET')
+      allow(request).to receive(:params).and_raise(RangeError, 'application failure')
+      action = action_subclass.new(flipper, request)
+
+      expect { action.send(:safe_params) }.to raise_error(RangeError, 'application failure')
     end
   end
 end

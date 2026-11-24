@@ -1,4 +1,6 @@
+require "open3"
 SpecHelpers.silence { require 'flipper/adapters/active_record' }
+require 'active_record/connection_adapters/sqlite3_adapter'
 
 # Turn off migration logging for specs
 ActiveRecord::Migration.verbose = false
@@ -13,6 +15,13 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
     migration = ERB.new(File.read(template_path))
     migration_version = "[#{ActiveRecord::VERSION::MAJOR}.#{ActiveRecord::VERSION::MINOR}]"
     eval migration.result_with_hash(migration_version: migration_version) # defines CreateFlipperTables
+  end
+
+  # Loading the adapter configures Flipper to use it. Clear that so the next
+  # spec's flipper_reset doesn't query a database that has been dropped.
+  after(:each) do
+    Flipper.instance = nil
+    Flipper.configuration = nil
   end
 
   [
@@ -34,7 +43,7 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
     {
       "adapter" => "postgresql",
       "encoding" => "unicode",
-      "host" => "127.0.0.1",
+      "host" => ENV["POSTGRES_HOST"] || "127.0.0.1",
       "username" => ENV["POSTGRES_USER"] || "",
       "password" => ENV["POSTGRES_PASSWORD"] || "",
       "database" => ENV["POSTGRES_DATABASE"] || "flipper_test",
@@ -57,6 +66,11 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
             ActiveRecord::Tasks::DatabaseTasks.purge(config)
             CreateFlipperTables.migrate(:up)
           end
+
+          # Rails main caches columns per model, so drop columns cached
+          # from the previous database's adapter.
+          Flipper::Adapters::ActiveRecord::Feature.reset_column_information
+          Flipper::Adapters::ActiveRecord::Gate.reset_column_information
         end
 
         after(:all) do
@@ -64,6 +78,27 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
         end
 
         it_should_behave_like 'a flipper adapter'
+        it_should_behave_like 'an adapter that stores its sync version'
+        it_should_behave_like 'an adapter that protects its sync version key'
+
+        it "does not let another process sync older flags over newer ones" do
+          remote = lambda do |enabled, number|
+            adapter = Flipper::Adapters::Memory.new
+            Flipper.new(adapter).enable(:search) if enabled
+            adapter.sync_version = Flipper::SyncVersion.new("scope", number)
+            adapter
+          end
+
+          # Each process has its own adapter instance over the same tables.
+          process_a = described_class.new
+          process_b = described_class.new
+
+          Flipper::Adapters::Sync::Synchronizer.new(process_a, remote.call(true, 10)).call
+          Flipper::Adapters::Sync::Synchronizer.new(process_b, remote.call(false, 8)).call
+
+          expect(Flipper.new(described_class.new).enabled?(:search)).to be(true)
+          expect(described_class.new.sync_version.number).to eq(10)
+        end
 
         it "should load actor ids fine" do
           flipper.enable_percentage_of_time(:foo, 1)
@@ -78,6 +113,23 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
           flipper.preload([:foo])
         end
 
+        it "ignores gate rows with unknown keys" do
+          flipper = Flipper.new(subject)
+          flipper.enable_actor(:foo, Flipper::Actor.new("User;1"))
+
+          Flipper::Adapters::ActiveRecord::Gate.create!(
+            feature_key: "foo",
+            key: "not_a_real_gate",
+            value: "junk",
+          )
+
+          expected = subject.default_config.merge(actors: Set["User;1"])
+          feature = flipper[:foo]
+          expect(subject.get(feature)).to eq(expected)
+          expect(subject.get_multi([feature])).to eq("foo" => expected)
+          expect(subject.get_all).to eq("foo" => expected)
+        end
+
         it 'should not poison wrapping transactions' do
           flipper = Flipper.new(subject)
 
@@ -90,6 +142,19 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
             # poisoned transaction isn't raised
             expect(Flipper::Adapters::ActiveRecord::Gate.count).to eq(1)
           end
+        end
+
+        it "warns once if the gates value column is not text" do
+          allow(Flipper::Adapters::ActiveRecord::Gate).
+            to receive(:column_for_attribute).
+            with(:value).
+            and_return(double(type: :string))
+
+          output = capture_output do
+            2.times { subject.features }
+          end
+
+          expect(output.scan("Your database needs to be migrated").size).to eq(1)
         end
 
         context "ActiveRecord connection_pool" do
@@ -362,6 +427,20 @@ RSpec.describe Flipper::Adapters::ActiveRecord do
         end
       end
     end
+  end
+
+  it "builds before anything else has loaded ActiveRecord::Base" do
+    script = <<~RUBY
+      require "active_record"
+      require "flipper/adapters/active_record"
+      abort "requiring the adapter loaded ActiveRecord::Base" unless ActiveRecord.autoload?(:Base)
+
+      Flipper::Adapters::ActiveRecord.new
+    RUBY
+
+    _, stderr, status = Open3.capture3(RbConfig.ruby, "-Ilib", "-e", script, chdir: FlipperRoot.to_s)
+
+    expect(status).to be_success, stderr
   end
 
   def active_connections?

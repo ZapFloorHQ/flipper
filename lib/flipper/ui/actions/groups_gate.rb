@@ -22,7 +22,7 @@ module Flipper
           feature = flipper[feature_name]
           value = params['value'].to_s.strip
 
-          if Flipper.group_exists?(value)
+          if flipper.group_exists?(value)
             case params['operation']
             when 'enable'
               feature.enable_group value
@@ -30,6 +30,11 @@ module Flipper
               feature.disable_group value
             end
 
+            redirect_to("/features/#{Flipper::UI::Util.escape feature.key}")
+          elsif params['operation'] == 'disable'
+            # Only enabling needs a registered group. Removing one that was
+            # unregistered after it was enabled has to work too.
+            feature.disable_group value
             redirect_to("/features/#{Flipper::UI::Util.escape feature.key}")
           else
             error = "The group named #{value.inspect} has not been registered."

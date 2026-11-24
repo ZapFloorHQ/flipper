@@ -27,6 +27,10 @@ module Flipper
         "#{name}(primary: #{@primary.adapter_stack}, secondary: #{@secondary.adapter_stack})"
       end
 
+      def read_only?
+        @primary.read_only? || (@dual_write && @secondary.read_only?)
+      end
+
       def features
         @primary.features
       rescue *@errors
@@ -49,6 +53,17 @@ module Flipper
         @primary.get_all(**kwargs)
       rescue *@errors
         @secondary.get_all(**kwargs)
+      end
+
+      def sync_version
+        @primary.sync_version
+      rescue *@errors
+        @secondary.sync_version
+      end
+
+      def sync_version=(version)
+        @primary.sync_version = version
+        @secondary.sync_version = version if @dual_write
       end
 
       def add(feature)

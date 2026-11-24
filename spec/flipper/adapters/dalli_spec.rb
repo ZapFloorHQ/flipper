@@ -6,7 +6,7 @@ RSpec.describe Flipper::Adapters::Dalli do
   let(:memory_adapter) do
     Flipper::Adapters::OperationLogger.new(Flipper::Adapters::Memory.new)
   end
-  let(:cache)   { Dalli::Client.new(ENV['MEMCACHED_URL']) }
+  let(:cache)   { Dalli::Client.new(ENV['MEMCACHED_URL'], protocol: :meta) }
   let(:adapter) { described_class.new(memory_adapter, cache, 10) }
   let(:flipper) { Flipper.new(adapter) }
 
@@ -20,6 +20,7 @@ RSpec.describe Flipper::Adapters::Dalli do
   end
 
   it_should_behave_like 'a flipper adapter'
+  it_should_behave_like 'an adapter that stores its sync version'
 
   it "knows ttl" do
     expect(adapter.ttl).to eq(10)

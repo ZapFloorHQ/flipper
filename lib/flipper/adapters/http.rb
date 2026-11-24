@@ -1,6 +1,8 @@
 require 'net/http'
+require 'uri'
 require 'json'
 require 'set'
+require 'digest'
 require 'flipper'
 require 'flipper/adapters/http/error'
 require 'flipper/adapters/http/client'
@@ -25,11 +27,19 @@ module Flipper
         @last_get_all_etag = nil
         @last_get_all_result = nil
         @last_get_all_response = nil
+        @last_get_all_sync_version = nil
         @get_all_mutex = Mutex.new
+        @sync_version_scope = sync_version_scope(options)
+      end
+
+      # Public: The Flipper::SyncVersion of the flags get_all last returned, or
+      # nil if the server didn't send one.
+      def sync_version
+        @get_all_mutex.synchronize { @last_get_all_sync_version }
       end
 
       def get(feature)
-        response = @client.get("/features/#{feature.key}")
+        response = @client.get("/features/#{path_escape(feature.key)}")
         if response.is_a?(Net::HTTPOK)
           parsed_response = Typecast.from_json(response.body)
           result_for_feature(feature, parsed_response.fetch('gates'))
@@ -41,8 +51,7 @@ module Flipper
       end
 
       def get_multi(features)
-        csv_keys = features.map(&:key).join(',')
-        response = @client.get("/features?keys=#{csv_keys}&exclude_gate_names=true")
+        response = @client.get("/features?#{query_for_features(features)}")
         raise Error, response unless response.is_a?(Net::HTTPOK)
 
         parsed_response = Typecast.from_json(response.body)
@@ -65,7 +74,7 @@ module Flipper
         path += "&_cb=#{Time.now.to_i}" if cache_bust
         etag = @get_all_mutex.synchronize { @last_get_all_etag }
 
-        if etag
+        if etag && !cache_bust
           options[:headers] = { if_none_match: etag }
         end
 
@@ -100,6 +109,7 @@ module Flipper
         @get_all_mutex.synchronize do
           @last_get_all_etag = response['etag'] if response['etag']
           @last_get_all_result = result
+          @last_get_all_sync_version = SyncVersion.from_header(@sync_version_scope, response[SyncVersion::HEADER])
         end
 
         result
@@ -125,7 +135,7 @@ module Flipper
       end
 
       def remove(feature)
-        response = @client.delete("/features/#{feature.key}")
+        response = @client.delete("/features/#{path_escape(feature.key)}")
         raise Error, response unless response.is_a?(Net::HTTPNoContent)
         true
       end
@@ -133,7 +143,7 @@ module Flipper
       def enable(feature, gate, thing)
         body = request_body_for_gate(gate, thing.value)
         query_string = gate.key == :groups ? "?allow_unregistered_groups=true" : ""
-        response = @client.post("/features/#{feature.key}/#{gate.key}#{query_string}", body)
+        response = @client.post("/features/#{path_escape(feature.key)}/#{path_escape(gate.key)}#{query_string}", body)
         raise Error, response unless response.is_a?(Net::HTTPOK)
         true
       end
@@ -143,16 +153,16 @@ module Flipper
         query_string = gate.key == :groups ? "?allow_unregistered_groups=true" : ""
         response = case gate.key
         when :percentage_of_actors, :percentage_of_time
-          @client.post("/features/#{feature.key}/#{gate.key}#{query_string}", body)
+          @client.post("/features/#{path_escape(feature.key)}/#{path_escape(gate.key)}#{query_string}", body)
         else
-          @client.delete("/features/#{feature.key}/#{gate.key}#{query_string}", body)
+          @client.delete("/features/#{path_escape(feature.key)}/#{path_escape(gate.key)}#{query_string}", body)
         end
         raise Error, response unless response.is_a?(Net::HTTPOK)
         true
       end
 
       def clear(feature)
-        response = @client.delete("/features/#{feature.key}/clear")
+        response = @client.delete("/features/#{path_escape(feature.key)}/clear")
         raise Error, response unless response.is_a?(Net::HTTPNoContent)
         true
       end
@@ -166,6 +176,30 @@ module Flipper
       end
 
       private
+
+      # Versions only compare between responses from the same server and
+      # credentials, such as one Cloud environment's token.
+      def sync_version_scope(options)
+        headers = (options[:headers] || {}).map { |key, value| [key.to_s.downcase, value.to_s] }.sort
+        Digest::SHA256.hexdigest([options.fetch(:url).to_s, headers].inspect)[0, 16]
+      end
+
+      def path_escape(key)
+        URI::DEFAULT_PARSER.escape(key.to_s, /[^A-Za-z0-9_.~-]/)
+      end
+
+      def query_escape(key)
+        URI.encode_www_form_component(key.to_s)
+      end
+
+      def query_for_features(features)
+        if features.any? { |feature| feature.key.to_s.include?(',') }
+          URI.encode_www_form(features.map { |feature| ["keys[]", feature.key] } + [["exclude_gate_names", "true"]])
+        else
+          csv_keys = features.map { |feature| query_escape(feature.key) }.join(',')
+          "keys=#{csv_keys}&exclude_gate_names=true"
+        end
+      end
 
       def request_body_for_gate(gate, value)
         data = case gate.key

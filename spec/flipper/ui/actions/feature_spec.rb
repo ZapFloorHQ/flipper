@@ -1,3 +1,5 @@
+require 'flipper/adapters/read_only'
+
 RSpec.describe Flipper::UI::Actions::Feature do
   let(:token) do
     if Rack::Protection::AuthenticityToken.respond_to?(:random_token)
@@ -125,6 +127,45 @@ RSpec.describe Flipper::UI::Actions::Feature do
       end
     end
 
+    context "when a read only adapter is wrapped by another adapter" do
+      let(:flipper) do
+        read_only = Flipper::Adapters::ReadOnly.new(build_memory_adapter)
+        build_flipper(Flipper::Adapters::ActorLimit.new(read_only))
+      end
+
+      it 'renders template with no buttons or ways to modify a feature' do
+        get '/features/search'
+        expect(last_response.status).to be(200)
+        expect(last_response.body).not_to include("Fully Enable")
+      end
+    end
+
+    context "when disable_fully_enable is true" do
+      before { Flipper::UI.configuration.disable_fully_enable = true }
+      after { Flipper::UI.configuration.disable_fully_enable = nil }
+
+      it 'renders the Fully Enable button as disabled' do
+        get '/features/search'
+        expect(last_response.body).to include('Fully Enable')
+        expect(last_response.body).to match(/disabled\s*>/)
+      end
+
+      it 'shows the default disabled tooltip' do
+        get '/features/search'
+        expect(last_response.body).to include('Fully enabling features via the UI is disabled.')
+      end
+    end
+
+    context "when disable_fully_enable is a custom message" do
+      before { Flipper::UI.configuration.disable_fully_enable = "Use deploy pipeline instead." }
+      after { Flipper::UI.configuration.disable_fully_enable = nil }
+
+      it 'shows custom disabled tooltip' do
+        get '/features/search'
+        expect(last_response.body).to include('Use deploy pipeline instead.')
+      end
+    end
+
     context 'custom actor names' do
       before do
         actor = Flipper::Actor.new('some_actor_name')
@@ -170,6 +211,25 @@ RSpec.describe Flipper::UI::Actions::Feature do
     end
   end
 
+  describe 'GET /features/:feature with an expression' do
+    it 'shows the expression, escaped' do
+      flipper[:search].enable_expression Flipper.property(:plan).eq("<b>basic</b>")
+
+      get '/features/search'
+
+      expect(last_response.status).to be(200)
+      expect(last_response.body).to include('Enabled for an expression')
+      expect(last_response.body).to include('&lt;b&gt;basic&lt;/b&gt;')
+      expect(last_response.body).not_to include('<b>basic</b>')
+    end
+
+    it 'leaves the section out when there is no expression' do
+      get '/features/search'
+
+      expect(last_response.body).not_to include('Enabled for an expression')
+    end
+  end
+
   describe 'GET /features/:feature with _features in feature name' do
     before do
       get '/features/search_features'
@@ -209,6 +269,20 @@ RSpec.describe Flipper::UI::Actions::Feature do
 
     it 'renders template' do
       expect(last_response.body).to include('../../../../blah')
+    end
+  end
+
+  describe 'GET /features/:feature with question mark in feature name' do
+    before do
+      get '/features/can_do_stuff%3F'
+    end
+
+    it 'responds with success' do
+      expect(last_response.status).to be(200)
+    end
+
+    it 'renders template with question mark in feature name' do
+      expect(last_response.body).to include('can_do_stuff?')
     end
   end
 end

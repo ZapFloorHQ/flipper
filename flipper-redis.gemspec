@@ -13,13 +13,12 @@ Gem::Specification.new do |gem|
   gem.license       = 'MIT'
   gem.homepage      = 'https://www.flippercloud.io/docs/adapters/redis'
 
-  gem.files         = `git ls-files`.split("\n").select(&flipper_redis_files) + ['lib/flipper/version.rb']
-  gem.test_files    = `git ls-files -- {test,spec,features}/*`.split("\n").select(&flipper_redis_files)
+  gem.files         = `git ls-files -- lib`.split("\n").select(&flipper_redis_files) + ['lib/flipper/version.rb']
   gem.name          = 'flipper-redis'
   gem.require_paths = ['lib']
   gem.version       = Flipper::VERSION
   gem.metadata      = Flipper::METADATA
 
   gem.add_dependency 'flipper', "~> #{Flipper::VERSION}"
-  gem.add_dependency 'redis', '>= 3.0', '< 6'
+  gem.add_dependency 'redis', '>= 3.0', '< 7'
 end

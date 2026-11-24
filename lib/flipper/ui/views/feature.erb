@@ -250,6 +250,14 @@
             </div>
           <% end %>
         </div>
+
+        <% if (expression = @feature.expression_value) %>
+          <%# Expression (read only, set with the Ruby or HTTP API) %>
+          <div class="card-body border-bottom">
+            <h6><strong>Enabled for an expression</strong></h6>
+            <code class="text-break"><%= Flipper::Typecast.to_json(expression) %></code>
+          </div>
+        <% end %>
       <% end %>
 
       <% if write_allowed? %>
@@ -260,16 +268,24 @@
             <div class="row">
               <% unless @feature.boolean_value %>
                 <div class="col d-grid">
-                  <button type="submit" name="action" value="Enable" class="btn btn-outline-success"
-                    <% if Flipper::UI.configuration.confirm_fully_enable %>
-                      data-confirmation-prompt="Are you sure you want to fully enable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
-                      data-confirmation-text="<%= feature_name %>"
-                    <% end %>
-                  >
-                    <span class="d-block" data-bs-toggle="tooltip" title="Enable for everyone">
-                      Fully Enable
+                  <% if Flipper::UI.configuration.disable_fully_enable %>
+                    <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" title="<%= Flipper::UI.configuration.disable_fully_enable_message %>">
+                      <button type="submit" name="action" value="Enable" class="btn btn-outline-success w-100" disabled style="pointer-events: none;">
+                        Fully Enable
+                      </button>
                     </span>
-                  </button>
+                  <% else %>
+                    <button type="submit" name="action" value="Enable" class="btn btn-outline-success"
+                      <% if Flipper::UI.configuration.confirm_fully_enable %>
+                        data-confirmation-prompt="Are you sure you want to fully enable this feature for everyone? Please enter the name of the feature to confirm it: <%= feature_name %>"
+                        data-confirmation-text="<%= feature_name %>"
+                      <% end %>
+                    >
+                      <span class="d-block" data-bs-toggle="tooltip" title="Enable for everyone">
+                        Fully Enable
+                      </span>
+                    </button>
+                  <% end %>
                 </div>
               <% end %>
 

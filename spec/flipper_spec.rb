@@ -1,6 +1,19 @@
 require 'flipper/cloud'
 
 RSpec.describe Flipper do
+  describe '.reserved_key?' do
+    it 'is true for keys starting with __flipper' do
+      expect(described_class.reserved_key?("__flipper_sync_version__")).to be(true)
+      expect(described_class.reserved_key?(:__flipper)).to be(true)
+    end
+
+    it 'is false for other keys' do
+      expect(described_class.reserved_key?("search")).to be(false)
+      expect(described_class.reserved_key?("__probe__")).to be(false)
+      expect(described_class.reserved_key?("my__flipper")).to be(false)
+    end
+  end
+
   describe '.new' do
     it 'returns new instance of dsl' do
       instance = described_class.new(double('Adapter'))
@@ -248,7 +261,7 @@ RSpec.describe Flipper do
           headers: {
             'flipper-cloud-token'=>'asdf',
           },
-        }).to_return(status: 200, body: '{"features": {}}', headers: {})
+        }).to_return(body: '{"features": {}}')
       cloud_configuration = Flipper::Cloud::Configuration.new({
         token: "asdf",
         sync_secret: "tasty",

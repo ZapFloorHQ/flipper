@@ -9,10 +9,15 @@ module Flipper
       WEBHOOK_PATH = %r{\A/webhooks\/?\Z}
       # Internal: The root path to match for requests.
       ROOT_PATH = %r{\A/\Z}
+      # Internal: Number of seconds a signed webhook remains valid. Bounds the
+      # window in which a captured, validly-signed request can be replayed,
+      # while staying loose enough to tolerate delivery retries and clock skew.
+      DEFAULT_SIGNATURE_TOLERANCE = 60 * 5
 
       def initialize(app, options = {})
         @app = app
         @env_key = options.fetch(:env_key, 'flipper')
+        @signature_tolerance = options.fetch(:signature_tolerance, DEFAULT_SIGNATURE_TOLERANCE)
       end
 
       def call(env)
@@ -27,17 +32,17 @@ module Flipper
             Rack::CONTENT_TYPE => "application/json",
           }
           body = "{}"
-          payload = request.body.read
+          payload = request.body&.read || "" # rack.input is optional since Rack 3.1
           signature = request.env["HTTP_FLIPPER_CLOUD_SIGNATURE"]
           flipper = env.fetch(@env_key)
 
           begin
             message_verifier = MessageVerifier.new(secret: flipper.sync_secret)
-            if message_verifier.verify(payload, signature)
+            if message_verifier.verify(payload, signature, tolerance: @signature_tolerance)
               begin
                 flipper.sync(cache_bust: true)
                 body = JSON.generate({
-                  groups: Flipper.group_names.map { |name| {name: name}}
+                  groups: flipper.group_names.map { |name| {name: name}}
                 })
               rescue Flipper::Adapters::Http::Error => error
                 status = error.response.code.to_i == 402 ? 402 : 500

@@ -1,3 +1,6 @@
+require "open3"
+require "rbconfig"
+
 RSpec.describe Flipper::Adapters::Memory do
   let(:source) { {} }
 
@@ -5,12 +8,91 @@ RSpec.describe Flipper::Adapters::Memory do
     subject { described_class.new(source, threadsafe: true) }
 
     it_should_behave_like 'a flipper adapter'
+    it_should_behave_like 'an adapter that stores its sync version'
   end
 
   context 'threadsafe: false' do
     subject { described_class.new(source, threadsafe: false) }
 
     it_should_behave_like 'a flipper adapter'
+    it_should_behave_like 'an adapter that stores its sync version'
+  end
+
+  describe "#import" do
+    def source_with(enabled, version)
+      adapter = described_class.new
+      Flipper.new(adapter).enable(:search) if enabled
+      adapter.sync_version = version
+      adapter
+    end
+
+    let(:newer) { Flipper::SyncVersion.new("scope", 10) }
+    let(:older) { Flipper::SyncVersion.new("scope", 8) }
+
+    it "keeps current flags when the source has an older sync version" do
+      subject.import(source_with(true, newer))
+      subject.import(source_with(false, older))
+
+      expect(subject.features).to eq(Set["search"])
+      expect(subject.sync_version).to eq(newer)
+    end
+
+    it "imports flags with the same or a newer sync version" do
+      subject.import(source_with(true, older))
+      subject.import(source_with(false, newer))
+
+      expect(subject.features).to eq(Set.new)
+      expect(subject.sync_version).to eq(newer)
+    end
+
+    it "imports flags without a sync version and keeps the recorded one" do
+      subject.import(source_with(true, newer))
+      subject.import(source_with(false, nil))
+
+      expect(subject.features).to eq(Set.new)
+      expect(subject.sync_version).to eq(newer)
+    end
+  end
+
+  it "replaces a set on write instead of changing one a reader holds" do
+    flipper = Flipper.new(subject)
+    flipper.enable_actor(:search, Flipper::Actor.new("User;1"))
+    actors = subject.get(flipper[:search])[:actors]
+
+    flipper.enable_actor(:search, Flipper::Actor.new("User;2"))
+    flipper.disable_actor(:search, Flipper::Actor.new("User;1"))
+
+    expect(actors).to eq(Set["User;1"])
+    expect(subject.get(flipper[:search])[:actors]).to eq(Set["User;2"])
+  end
+
+  describe "#features" do
+    let(:adapter) { described_class.new }
+    let(:flipper) { Flipper.new(adapter) }
+
+    it "returns one frozen set until a write changes the flags" do
+      flipper.add(:search)
+      features = adapter.features
+      expect(features).to be_frozen
+      expect(adapter.features).to be(features)
+      expect(adapter.get(flipper[:search])).to be_a(Hash)
+      expect(adapter.features).to be(features)
+    end
+
+    it "includes flags that any write adds or removes" do
+      flipper.enable(:a)
+      expect(adapter.features).to eq(Set["a"])
+      flipper.disable(:b)
+      expect(adapter.features).to eq(Set["a", "b"])
+      adapter.clear(flipper[:c])
+      expect(adapter.features).to eq(Set["a", "b", "c"])
+      flipper.add(:d)
+      expect(adapter.features).to eq(Set["a", "b", "c", "d"])
+      flipper.remove(:a)
+      expect(adapter.features).to eq(Set["b", "c", "d"])
+      adapter.import(described_class.new({ "e" => {} }))
+      expect(adapter.features).to eq(Set["e"])
+    end
   end
 
   it "can initialize from big hash" do
@@ -32,5 +114,68 @@ RSpec.describe Flipper::Adapters::Memory do
       "pro_deal" => subject.default_config.merge(:percentage_of_actors => "20"),
       "following" => subject.default_config.merge(actors: Set["1", "3"], groups: Set["staff"]),
     })
+  end
+
+  it "uses its inherited Mutex safely after a fork" do
+    skip "Process.fork is not supported" unless Process.respond_to?(:fork)
+
+    script = <<~'RUBY'
+      require "flipper"
+
+      adapter = Flipper::Adapters::Memory.new({}, threadsafe: true)
+      mutex = adapter.instance_variable_get(:@lock)
+      raise "memory adapter does not use Mutex" unless mutex.instance_of?(Mutex)
+
+      locked = Queue.new
+      release = Queue.new
+      holder = Thread.new do
+        mutex.lock
+        locked << true
+        release.pop
+        mutex.unlock
+      end
+      locked.pop
+
+      begin
+        child_pid = fork do
+          begin
+            adapter.features
+            exit! 0
+          rescue => error
+            warn error.message
+            exit! 1
+          end
+        end
+
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+        status = nil
+        until status
+          if result = Process.wait2(child_pid, Process::WNOHANG)
+            _, status = result
+          elsif Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            Process.kill("KILL", child_pid)
+            Process.wait(child_pid)
+            raise "forked child timed out"
+          else
+            sleep 0.01
+          end
+        end
+      ensure
+        release << true
+        holder.join(1)
+      end
+
+      exit(status.success? ? 0 : 1)
+    RUBY
+
+    _, stderr, status = Open3.capture3(
+      RbConfig.ruby,
+      "-Ilib",
+      "-e",
+      script,
+      chdir: File.expand_path("../../..", __dir__)
+    )
+
+    expect(status).to be_success, stderr
   end
 end

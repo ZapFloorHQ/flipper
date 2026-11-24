@@ -19,6 +19,10 @@ module Flipper
         "#{name}(local: #{@local.adapter_stack}, remote: #{@remote.adapter_stack})"
       end
 
+      def read_only?
+        @remote.read_only? || @local.read_only?
+      end
+
       def features
         @local.features
       end
@@ -33,6 +37,14 @@ module Flipper
 
       def get_all(**kwargs)
         @local.get_all(**kwargs)
+      end
+
+      def sync_version
+        @local.sync_version
+      end
+
+      def sync_version=(version)
+        @local.sync_version = version
       end
 
       def add(feature)

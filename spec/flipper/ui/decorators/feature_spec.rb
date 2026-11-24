@@ -1,6 +1,4 @@
 RSpec.describe Flipper::UI::Decorators::Feature do
-  let(:source)  { {} }
-  let(:adapter) { Flipper::Adapters::Memory.new(source) }
   let(:flipper) { build_flipper }
   let(:feature) { flipper[:some_awesome_feature] }
 
@@ -14,9 +12,26 @@ RSpec.describe Flipper::UI::Decorators::Feature do
     end
   end
 
-  describe '#pretty_name' do
-    it 'capitalizes each word separated by underscores' do
-      expect(subject.pretty_name).to eq('Some Awesome Feature')
+  describe '#gates_in_words' do
+    it 'escapes actor values in the tooltip title' do
+      feature.enable_actor Flipper::Actor.new('x" onmouseover="alert(document.domain)')
+
+      expect(subject.gates_in_words).to include('title="x&quot; onmouseover=&quot;alert(document.domain)"')
+      expect(subject.gates_in_words).to include('>1 actor</span>')
+      expect(subject.gates_in_words).not_to include('title="x" onmouseover="alert(document.domain)"')
+    end
+
+    it 'mentions an expression' do
+      feature.enable_expression Flipper.property(:plan).eq("basic")
+
+      expect(subject.gates_in_words).to eq('an expression')
+    end
+
+    it 'lists an expression after the other gates' do
+      feature.enable_percentage_of_time 5
+      feature.enable_expression Flipper.property(:plan).eq("basic")
+
+      expect(subject.gates_in_words).to eq('5% of time and an expression')
     end
   end
 

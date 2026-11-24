@@ -1,4 +1,6 @@
 require "flipper/cli"
+require "open3"
+require "rbconfig"
 
 RSpec.describe Flipper::CLI do
   let(:stdout) { StringIO.new }
@@ -19,7 +21,9 @@ RSpec.describe Flipper::CLI do
     descriptions.map { |arg| Shellwords.split(arg) }.flatten
   end
 
-  subject do
+  subject { run_cli(argv) }
+
+  def run_cli(argv)
     status = 0
 
     begin
@@ -76,6 +80,29 @@ RSpec.describe Flipper::CLI do
         expect(subject).to have_attributes(status: 0, stdout: /feature.*enabled.*User;1/m)
         expect(Flipper.feature('feature').expression.value).to eq({ "Equal" => [ { "Property" => ["flipper_id"] }, "User;1" ] })
       end
+    end
+
+    describe "feature -p nope" do
+      it { should have_attributes(status: 1, stderr: /invalid argument: -p nope/) }
+    end
+
+    describe "feature -p" do
+      it { should have_attributes(status: 1, stderr: /missing argument: -p/) }
+    end
+
+    describe "feature -p 150" do
+      it do
+        expect(subject).to have_attributes(status: 1, stderr: /invalid argument.*less than or equal to 100/)
+        expect(Flipper.features).to be_empty
+      end
+    end
+
+    describe "feature -t -1" do
+      it { should have_attributes(status: 1, stderr: /invalid argument.*positive number/) }
+    end
+
+    describe %|feature -x '{"Nope":[]}'| do
+      it { should have_attributes(status: 1, stderr: /Invalid expression.*Nope/m) }
     end
 
     describe %|feature -x invalid_json| do
@@ -137,14 +164,168 @@ RSpec.describe Flipper::CLI do
 
   describe "help enable" do
     it { should have_attributes(status: 0, stdout: /Usage: flipper enable \[options\] <feature>/) }
+    it { should have_attributes(stdout: /--expression=JSON/) }
   end
 
   describe "nope" do
     it { should have_attributes(status: 1, stderr: /Unknown command: nope/) }
   end
 
+  describe "help nope" do
+    it { should have_attributes(status: 1, stdout: /Usage: flipper/, stderr: /Unknown command: nope/) }
+  end
+
+  %w[enable disable show].each do |command|
+    describe command do
+      it { should have_attributes(status: 1, stdout: /Usage: flipper #{command} \[options\] <feature>/, stderr: /Missing feature name/) }
+    end
+  end
+
+  describe "cloud nope" do
+    it { should have_attributes(status: 1, stdout: /Usage: flipper cloud/, stderr: /Unknown command: cloud nope/) }
+  end
+
   describe "--nope" do
     it { should have_attributes(status: 1, stderr: /invalid option: --nope/) }
+  end
+
+  describe "export" do
+    before do
+      Flipper.enable :search
+      Flipper.disable :analytics
+    end
+
+    it "outputs valid JSON export" do
+      expect(subject).to have_attributes(status: 0)
+      data = JSON.parse(subject.stdout)
+      expect(data["version"]).to eq(1)
+      expect(data["features"]).to have_key("search")
+      expect(data["features"]).to have_key("analytics")
+    end
+  end
+
+  cloud_help = /Usage: flipper cloud <command>\n\nCommands:\n  migrate +Migrate features.*\n  push +Push features/
+
+  ["cloud", "help cloud"].each do |command|
+    describe command do
+      it { should have_attributes(status: 0, stdout: cloud_help) }
+    end
+  end
+
+  # Help never loads the app, so it also works outside one.
+  context "outside an app" do
+    before { ENV["FLIPPER_REQUIRE"] = "./spec/fixtures/missing_environment" }
+
+    enable_help = /Usage: flipper enable \[options\] <feature>\n.*--expression=JSON/m
+
+    {
+      "enable --help" => enable_help,
+      "enable -h" => enable_help,
+      "enable search --help" => enable_help,
+      "show -h" => /Usage: flipper show \[options\] <feature>/,
+      "list --help" => /Usage: flipper list/,
+      "cloud --help" => cloud_help,
+      "cloud push --help" => cloud_help,
+    }.each do |command, usage|
+      it "prints help for #{command}" do
+        expect(run_cli(Shellwords.split(command))).to have_attributes(status: 0, stdout: usage, stderr: "")
+      end
+    end
+
+    [%w[enable -- --help], %w[enable -a --help feature], %w[enable --actor -h feature], %w[disable -g --help feature]].each do |argv|
+      it "treats --help as an argument in #{argv.join(" ")}" do
+        expect(run_cli(argv)).to have_attributes(status: 1, stderr: /cannot load such file/)
+      end
+    end
+
+    it "still prints help after an option with an attached value" do
+      expect(run_cli(%w[enable --actor=User;1 --help])).to have_attributes(status: 0, stdout: enable_help)
+    end
+  end
+
+  describe "cloud migrate" do
+    before do
+      Flipper.enable :search
+      require 'flipper/cloud/migrate'
+      allow(Flipper::Cloud).to receive(:migrate).and_return(
+        Flipper::Cloud::MigrateResult.new(code: 200, url: "https://www.flippercloud.io/cloud/setup/abc123")
+      )
+    end
+
+    it "prints instructions and the cloud URL" do
+      expect(cli).not_to receive(:system)
+
+      expect(subject).to have_attributes(
+        status: 0,
+        stdout: /Open this URL in your browser to finish migrating your features:\nhttps:\/\/www\.flippercloud\.io/
+      )
+    end
+
+    it "does not open URLs returned by the migration API" do
+      allow(Flipper::Cloud).to receive(:migrate).and_return(
+        Flipper::Cloud::MigrateResult.new(code: 200, url: "file:///Applications/Calculator.app")
+      )
+      expect(cli).not_to receive(:system)
+
+      expect(subject).to have_attributes(status: 0, stdout: %r{file:///Applications/Calculator.app})
+    end
+  end
+
+  describe "cloud push test-token" do
+    before do
+      Flipper.enable :search
+      require 'flipper/cloud/migrate'
+      allow(Flipper::Cloud).to receive(:push).and_return(
+        Flipper::Cloud::MigrateResult.new(code: 204, url: nil)
+      )
+    end
+
+    it "prints success message" do
+      expect(subject).to have_attributes(status: 0, stdout: /Successfully pushed/)
+      expect(Flipper::Cloud).to have_received(:push).with("test-token", Flipper)
+    end
+  end
+
+  describe "cloud push" do
+    let(:argv) { %w[cloud push] }
+    let(:stdin) { StringIO.new }
+
+    around do |example|
+      original, $stdin = $stdin, stdin
+      example.run
+    ensure
+      $stdin = original
+    end
+
+    before do
+      require 'flipper/cloud/migrate'
+      allow(Flipper::Cloud).to receive(:push).and_return(
+        Flipper::Cloud::MigrateResult.new(code: 204, url: nil)
+      )
+    end
+
+    context "from a terminal" do
+      let(:stdin) { StringIO.new("secret-token\n") }
+
+      before do
+        allow(stdin).to receive(:tty?).and_return(true)
+        allow(stdin).to receive(:noecho) { |&block| block.call(stdin) }
+      end
+
+      it "asks for the token without echoing it" do
+        expect(subject).to have_attributes(status: 0, stdout: /Successfully pushed/, stderr: /Flipper Cloud token: /)
+        expect(stdin).to have_received(:noecho)
+        expect(Flipper::Cloud).to have_received(:push).with("secret-token", Flipper)
+        expect(subject.stdout + subject.stderr).not_to include("secret-token")
+      end
+    end
+
+    context "without a terminal" do
+      it "prints usage and does not push" do
+        expect(subject).to have_attributes(status: 1, stderr: /Usage: flipper cloud push \[token\]/)
+        expect(Flipper::Cloud).not_to have_received(:push)
+      end
+    end
   end
 
   describe "show foo" do
@@ -162,5 +343,21 @@ RSpec.describe Flipper::CLI do
       before { Flipper.enable_group :foo, :admins }
       it { should have_attributes(status: 0, stdout: /enabled.*admins/m) }
     end
+  end
+
+  describe "--version" do
+    it { should have_attributes(status: 0, stdout: "flipper #{Flipper::VERSION}\n", stderr: "") }
+  end
+
+  describe "-v" do
+    it { should have_attributes(status: 0, stdout: "flipper #{Flipper::VERSION}\n", stderr: "") }
+  end
+
+  it "runs without Bundler loaded, as after gem install flipper" do
+    _, stderr, status = Bundler.with_unbundled_env do
+      Open3.capture3(RbConfig.ruby, "-Ilib", "exe/flipper", "--help", chdir: File.expand_path("../..", __dir__))
+    end
+
+    expect(status).to be_success, stderr
   end
 end

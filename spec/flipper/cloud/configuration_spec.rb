@@ -68,9 +68,52 @@ RSpec.describe Flipper::Cloud::Configuration do
     expect(instance.sync_interval).to eq(15)
   end
 
+  describe "default sync_interval" do
+    around do |example|
+      saved = ENV.to_h.slice("FLIPPER_CLOUD_SYNC_INTERVAL", "FLIPPER_CLOUD_SYNC_SECRET")
+      saved.each_key { |key| ENV.delete(key) }
+      example.run
+    ensure
+      saved.each { |key, value| ENV[key] = value }
+    end
+
+    it "is 10 seconds when syncing by poll" do
+      instance = described_class.new(required_options)
+      expect(instance.sync_interval).to eq(10)
+    end
+
+    it "is 5 minutes when syncing by webhook" do
+      instance = described_class.new(required_options.merge(sync_secret: "secret"))
+      expect(instance.sync_interval).to eq(300)
+    end
+
+    it "follows sync_secret set after initialize" do
+      instance = described_class.new(required_options)
+      instance.sync_secret = "secret"
+      expect(instance.sync_interval).to eq(300)
+    end
+
+    it "is overridden by the sync_interval option when syncing by webhook" do
+      instance = described_class.new(required_options.merge(sync_secret: "secret", sync_interval: 30))
+      expect(instance.sync_interval).to eq(30)
+    end
+
+    it "is overridden by the ENV var when syncing by webhook" do
+      ENV["FLIPPER_CLOUD_SYNC_INTERVAL"] = "30"
+      instance = described_class.new(required_options.merge(sync_secret: "secret"))
+      expect(instance.sync_interval).to eq(30)
+    end
+
+    it "is passed to the poller when syncing by webhook" do
+      stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
+      instance = described_class.new(required_options.merge(sync_secret: "secret"))
+      expect(instance.send(:poller).interval).to eq(300)
+    end
+  end
+
   it "passes sync_interval into sync adapter" do
     # The initial sync of http to local invokes this web request.
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
 
     instance = described_class.new(required_options.merge(sync_interval: 20))
     poller = instance.send(:poller)
@@ -90,7 +133,7 @@ RSpec.describe Flipper::Cloud::Configuration do
 
   it "defaults adapter block" do
     # The initial sync of http to local invokes this web request.
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
 
     instance = described_class.new(required_options)
     expect(instance.adapter).to be_instance_of(Flipper::Adapters::DualWrite)
@@ -98,7 +141,7 @@ RSpec.describe Flipper::Cloud::Configuration do
 
   it "can override adapter block" do
     # The initial sync of http to local invokes this web request.
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
 
     instance = described_class.new(required_options)
     instance.adapter do |adapter|
@@ -113,13 +156,42 @@ RSpec.describe Flipper::Cloud::Configuration do
   end
 
   it "can override url using options" do
-    options = required_options.merge(url: "http://localhost:5000/adapter")
+    options = required_options.merge(url: "https://localhost:5000/adapter")
     instance = described_class.new(options)
-    expect(instance.url).to eq("http://localhost:5000/adapter")
+    expect(instance.url).to eq("https://localhost:5000/adapter")
 
     instance = described_class.new(required_options)
-    instance.url = "http://localhost:5000/adapter"
-    expect(instance.url).to eq("http://localhost:5000/adapter")
+    instance.url = "https://localhost:5000/adapter"
+    expect(instance.url).to eq("https://localhost:5000/adapter")
+  end
+
+  it "requires https url" do
+    invalid_urls = [
+      "http://localhost:5000/adapter",
+      "https://",
+      "https:localhost:5000/adapter",
+      "https://local host:5000/adapter",
+    ]
+
+    invalid_urls.each do |url|
+      options = required_options.merge(url: url)
+      expect { described_class.new(options) }.to raise_error(ArgumentError, /must use https/)
+    end
+
+    instance = described_class.new(required_options)
+    expect { instance.url = "http://localhost:5000/adapter" }.to raise_error(ArgumentError, /must use https/)
+  end
+
+  it "keeps the validated url immutable" do
+    url = String.new("https://localhost:5000/adapter")
+    instance = described_class.new(required_options.merge(url: url))
+
+    url.replace("http://localhost:5000/adapter")
+
+    expect(instance.url).to eq("https://localhost:5000/adapter")
+    expect(instance.url).to be_frozen
+    expect { instance.url.replace("http://localhost:5000/adapter") }.to raise_error(FrozenError)
+    expect(instance.send(:http_adapter).client.uri.scheme).to eq("https")
   end
 
   it "can override URL using ENV var" do
@@ -136,7 +208,7 @@ RSpec.describe Flipper::Cloud::Configuration do
 
   it "sets sync_method to :webhook if sync_secret provided" do
     # The initial sync of http to local invokes this web request.
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
 
     instance = described_class.new(required_options.merge({
       sync_secret: "secret",
@@ -146,15 +218,37 @@ RSpec.describe Flipper::Cloud::Configuration do
     expect(instance.adapter).to be_instance_of(Flipper::Adapters::DualWrite)
   end
 
+  it "sets sync_method to :poll if sync_secret is empty" do
+    instance = described_class.new(required_options.merge({
+      sync_secret: "",
+    }))
+
+    expect(instance.sync_method).to eq(:poll)
+  end
+
+  it "does not treat a whitespace sync_secret as empty" do
+    instance = described_class.new(required_options.merge(sync_secret: " "))
+
+    expect(instance.sync_secret).to eq(" ")
+    expect(instance.sync_method).to eq(:webhook)
+  end
+
   it "sets sync_method to :webhook if FLIPPER_CLOUD_SYNC_SECRET set" do
     # The initial sync of http to local invokes this web request.
-    stub_request(:get, /flippercloud\.io/).to_return(status: 200, body: "{}")
+    stub_request(:get, /flippercloud\.io/).to_return(body: "{}")
 
     ENV["FLIPPER_CLOUD_SYNC_SECRET"] = "abc"
     instance = described_class.new(required_options)
 
     expect(instance.sync_method).to eq(:webhook)
     expect(instance.adapter).to be_instance_of(Flipper::Adapters::DualWrite)
+  end
+
+  it "sets sync_method to :poll if FLIPPER_CLOUD_SYNC_SECRET is empty" do
+    ENV["FLIPPER_CLOUD_SYNC_SECRET"] = ""
+    instance = described_class.new(required_options)
+
+    expect(instance.sync_method).to eq(:poll)
   end
 
   it "can set sync_secret" do
@@ -240,7 +334,7 @@ RSpec.describe Flipper::Cloud::Configuration do
         headers: {
           'flipper-cloud-token'=>'asdf',
         },
-      }).to_return(status: 200, body: body)
+      }).to_return(body: body)
     instance = described_class.new(required_options)
     instance.sync
 

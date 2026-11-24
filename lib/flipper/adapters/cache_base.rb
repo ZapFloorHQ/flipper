@@ -35,6 +35,10 @@ module Flipper
         @get_all_cache_key = "#{@namespace}/get_all"
       end
 
+      def read_only?
+        @adapter.read_only?
+      end
+
       # Public: Expire the cache for the set of all features with gates.
       def expire_get_all_cache
         cache_delete @get_all_cache_key
@@ -96,6 +100,19 @@ module Flipper
           cache_write @features_cache_key, result.keys.to_set
           result
         }
+      end
+
+      # Public
+      def import(source)
+        feature_keys = @adapter.features
+        result = @adapter.import(source)
+        return result unless result
+
+        feature_keys |= @adapter.features
+
+        feature_keys.each { |key| cache_delete feature_cache_key(key) }
+        expire_features_cache
+        result
       end
 
       # Public

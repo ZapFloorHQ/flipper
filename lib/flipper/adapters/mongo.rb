@@ -1,6 +1,7 @@
 require 'set'
 require 'flipper'
 require 'mongo'
+require 'concurrent/map'
 
 module Flipper
   module Adapters
@@ -20,8 +21,20 @@ module Flipper
         read_feature_keys
       end
 
+      # Public: The Flipper::SyncVersion of the flags last synced into this
+      # adapter, shared by every process using the same collection.
+      def sync_version
+        SyncVersion.parse(find(SyncVersion::KEY)['value'])
+      end
+
+      # Public: Records the Flipper::SyncVersion of the flags just synced.
+      def sync_version=(version)
+        update SyncVersion::KEY, '$set' => { 'value' => version.to_s }
+      end
+
       # Public: Adds a feature to the set of known features.
       def add(feature)
+        ensure_not_reserved_key!(feature)
         update @features_key, '$addToSet' => { 'features' => feature.key }
         true
       end
@@ -29,12 +42,14 @@ module Flipper
       # Public: Removes a feature from the set of known features.
       def remove(feature)
         update @features_key, '$pull' => { 'features' => feature.key }
-        clear feature
+        # Removing a reserved name left in the list must not delete the list.
+        clear feature unless reserved_key?(feature)
         true
       end
 
       # Public: Clears all the gate values for a feature.
       def clear(feature)
+        ensure_not_reserved_key!(feature)
         delete feature.key
         true
       end
@@ -64,6 +79,7 @@ module Flipper
       #
       # Returns true.
       def enable(feature, gate, thing)
+        ensure_not_reserved_key!(feature)
         case gate.data_type
         when :boolean
           clear(feature)
@@ -97,6 +113,7 @@ module Flipper
       #
       # Returns true.
       def disable(feature, gate, thing)
+        ensure_not_reserved_key!(feature)
         case gate.data_type
         when :boolean
           delete feature.key
@@ -121,6 +138,20 @@ module Flipper
 
       private
 
+      # Private: The feature list and sync version live in documents next to
+      # the feature documents, so a feature with the same key would overwrite
+      # or delete them.
+      def reserved_key?(feature)
+        Flipper.reserved_key?(feature.key) || feature.key == @features_key.to_s
+      end
+
+      def ensure_not_reserved_key!(feature)
+        super
+        return unless feature.key == @features_key.to_s
+
+        raise ArgumentError, "#{feature.key.inspect} is reserved by the Mongo adapter and cannot be used as a feature name"
+      end
+
       def read_feature_keys
         find(@features_key).fetch('features') { Set.new }.to_set
       end
@@ -129,7 +160,7 @@ module Flipper
         docs = find_many(features.map(&:key))
         result = {}
         features.each do |feature|
-          result[feature.key] = result_for_feature(feature, docs[feature.key])
+          result[feature.key] = result_for_feature(feature, docs.fetch(feature.key, {}))
         end
         result
       end
@@ -146,7 +177,7 @@ module Flipper
 
       def find_many(keys)
         docs = @collection.find(_id: { '$in' => keys }).to_a
-        result = Hash.new { |hash, key| hash[key] = {} }
+        result = {}
         docs.each do |doc|
           result[doc['_id']] = doc
         end
@@ -187,6 +218,10 @@ module Flipper
 end
 
 Flipper.configure do |config|
+  # Each thread builds its own adapter. Mongo::Client is thread safe and pooled,
+  # so share one per process instead of leaving one open for every thread.
+  clients = Concurrent::Map.new
+
   config.adapter do
     url = ENV["FLIPPER_MONGO_URL"] || ENV["MONGO_URL"]
     collection = ENV["FLIPPER_MONGO_COLLECTION"] || "flipper"
@@ -195,6 +230,7 @@ Flipper.configure do |config|
       raise ArgumentError, "The MONGO_URL environment variable must be set. For example: mongodb://127.0.0.1:27017/flipper"
     end
 
-    Flipper::Adapters::Mongo.new(Mongo::Client.new(url)[collection])
+    client = clients.compute_if_absent([Process.pid, url]) { Mongo::Client.new(url) }
+    Flipper::Adapters::Mongo.new(client[collection])
   end
 end

@@ -9,6 +9,22 @@ module Flipper
     # Private: The name of feature instrumentation events.
     InstrumentationName = "feature_operation.#{InstrumentationNamespace}".freeze
 
+    # Private: Gates hold no state, so every feature shares the same instances
+    # instead of allocating six per feature (adapters build throwaway features
+    # on every get_all).
+    GATES_HASH = {
+      boolean: Gates::Boolean.new,
+      expression: Gates::Expression.new,
+      actor: Gates::Actor.new,
+      percentage_of_actors: Gates::PercentageOfActors.new,
+      percentage_of_time: Gates::PercentageOfTime.new,
+      group: Gates::Group.new,
+    }.freeze
+    private_constant :GATES_HASH
+
+    GATES = GATES_HASH.values.freeze
+    private_constant :GATES
+
     # Public: The name of the feature.
     attr_reader :name
 
@@ -20,6 +36,15 @@ module Flipper
 
     # Private: What is being used to instrument all the things.
     attr_reader :instrumenter
+
+    # Internal: Resolves group names for the instance that owns this feature.
+    attr_reader :group_resolver
+
+    # Internal: Resolves features referenced by expressions.
+    attr_reader :feature_resolver
+
+    # Internal: Identity used to isolate circular expression tracking.
+    attr_reader :instance_key
 
     # Internal: Initializes a new feature instance.
     #
@@ -34,33 +59,29 @@ module Flipper
       @key = name.to_s
       @instrumenter = options.fetch(:instrumenter, Instrumenters::Noop)
       @adapter = adapter
+      @group_resolver = options.fetch(:group_resolver, Flipper)
+      @feature_resolver = options.fetch(:feature_resolver, Flipper)
+      @instance_key = options[:instance_key]
     end
 
     # Public: Enable this feature for something.
     #
     # Returns the result of Adapter#enable.
     def enable(thing = true)
-      instrument(:enable) do |payload|
-        adapter.add self
-
-        gate = gate_for(thing)
-        wrapped_thing = gate.wrap(thing)
-        payload[:gate_name] = gate.name
-        payload[:thing] = wrapped_thing
-
-        adapter.enable self, gate, wrapped_thing
-      end
+      enable_thing(thing, validate_expression: true)
     end
 
     # Public: Disable this feature for something.
     #
     # Returns the result of Adapter#disable.
     def disable(thing = false)
+      ensure_not_reserved!
       instrument(:disable) do |payload|
+        gate = gate_for(thing)
+        wrapped_thing = wrap_for(gate, thing)
+
         adapter.add self
 
-        gate = gate_for(thing)
-        wrapped_thing = gate.wrap(thing)
         payload[:gate_name] = gate.name
         payload[:thing] = wrapped_thing
 
@@ -68,11 +89,15 @@ module Flipper
       end
     end
 
-    # Public: Adds this feature.
+    # Public: Adds this feature. Adding on purpose is allowed in strict mode;
+    # enable and disable still raise there for a feature that doesn't exist.
     #
     # Returns the result of Adapter#add.
     def add
-      instrument(:add) { adapter.add(self) }
+      ensure_not_reserved!
+      instrument(:add) do
+        Adapters::Strict.adding(key) { adapter.add(self) }
+      end
     end
 
     # Public: Does this feature exist in the adapter.
@@ -93,6 +118,7 @@ module Flipper
     #
     # Returns the result of Adapter#clear.
     def clear
+      ensure_not_reserved!
       instrument(:clear) { adapter.clear(self) }
     end
 
@@ -100,22 +126,15 @@ module Flipper
     #
     # Returns true if enabled, false if not.
     def enabled?(*actors)
-      actors = Array(actors).
-        # Avoids to_ary warning that happens when passing DelegateClass of an 
-        # ActiveRecord object and using flatten here. This is tested in 
-        # spec/flipper/model/active_record_spec.rb.
-        flat_map { |actor| actor.is_a?(Array) ? actor : [actor] }. 
-        # Allows null object pattern. See PR for more. https://github.com/flippercloud/flipper/pull/887
-        reject(&:nil?). 
-        map { |actor| Types::Actor.wrap(actor) }
-      actors = nil if actors.empty?
+      actors = wrap_actors(actors)
 
       # thing is left for backwards compatibility
       instrument(:enabled?, thing: actors&.first, actors: actors) do |payload|
         context = FeatureCheckContext.new(
           feature_name: @name,
           values: gate_values,
-          actors: actors
+          actors: actors,
+          feature: self
         )
 
         if open_gate = gates.detect { |gate| gate.open?(context) }
@@ -132,6 +151,8 @@ module Flipper
     # expression - an Expression or Hash that can be converted to an expression.
     #
     # Returns result of enable.
+    # Raises ArgumentError if the expression contains empty Any/All groups,
+    # because an empty All matches every actor.
     def enable_expression(expression)
       enable Expression.build(expression)
     end
@@ -141,12 +162,18 @@ module Flipper
     # expression_to_add - an expression or Hash that can be converted to an expression.
     #
     # Returns result of enable.
+    # Raises ArgumentError if the resulting expression contains empty Any/All
+    # groups, because an empty All matches every actor.
     def add_expression(expression_to_add)
-      if (current_expression = expression)
-        enable current_expression.add(expression_to_add)
+      expression_to_add = Expression.build(expression_to_add)
+
+      new_expression = if (current_expression = expression)
+        current_expression.add(expression_to_add)
       else
-        enable expression_to_add
+        expression_to_add
       end
+
+      enable new_expression
     end
 
     # Public: Enables a feature for an actor.
@@ -166,7 +193,7 @@ module Flipper
     #
     # Returns result of enable.
     def enable_group(group)
-      enable Types::Group.wrap(group)
+      enable Types::Group.wrap(group, @group_resolver)
     end
 
     # Public: Enables a feature a percentage of time.
@@ -199,14 +226,27 @@ module Flipper
     end
 
     # Public: Remove an expression from a feature. Does nothing if no expression is
-    # currently enabled.
+    # currently enabled. Removing the last condition disables the expression
+    # rather than persisting an empty group.
     #
     # expression - an Expression or Hash that can be converted to an expression.
     #
-    # Returns result of enable or nil (if no expression enabled).
+    # Returns result of enable or disable or nil (if no expression enabled).
     def remove_expression(expression_to_remove)
       if (current_expression = expression)
-        enable current_expression.remove(expression_to_remove)
+        remaining = current_expression
+          .remove(Expression.build(expression_to_remove))
+          .prune_empty_groups
+
+        if remaining.nil?
+          disable_expression
+        else
+          # remove and prune only delete nodes, so any empty group left in
+          # remaining was already stored (e.g. mirrored by sync). Persist it
+          # unvalidated: rejecting it here would block removing unrelated
+          # conditions from legacy data.
+          enable_thing(remaining, validate_expression: false)
+        end
       end
     end
 
@@ -227,7 +267,7 @@ module Flipper
     #
     # Returns result of disable.
     def disable_group(group)
-      disable Types::Group.wrap(group)
+      disable Types::Group.wrap(group, @group_resolver)
     end
 
     # Public: Disables a feature a percentage of time.
@@ -291,7 +331,7 @@ module Flipper
     #
     # Returns Set of Flipper::Types::Group instances.
     def enabled_groups
-      groups_value.map { |name| Flipper.group(name) }.to_set
+      groups_value.map { |name| @group_resolver.group(name) }.to_set
     end
     alias_method :groups, :enabled_groups
 
@@ -299,7 +339,7 @@ module Flipper
     #
     # Returns Set of Flipper::Types::Group instances.
     def disabled_groups
-      Flipper.groups - enabled_groups
+      @group_resolver.groups - enabled_groups
     end
 
     def expression
@@ -402,18 +442,11 @@ module Flipper
     #
     # Returns an array of gates
     def gates
-      @gates ||= gates_hash.values.freeze
+      GATES
     end
 
     def gates_hash
-      @gates_hash ||= {
-        boolean: Gates::Boolean.new,
-        expression: Gates::Expression.new,
-        actor: Gates::Actor.new,
-        percentage_of_actors: Gates::PercentageOfActors.new,
-        percentage_of_time: Gates::PercentageOfTime.new,
-        group: Gates::Group.new,
-      }.freeze
+      GATES_HASH
     end
 
     # Public: Find a gate by name.
@@ -435,10 +468,87 @@ module Flipper
 
     private
 
+    # Private: Groups resolve through the instance that owns this feature, so
+    # a named instance's groups are found in its own registry.
+    def wrap_for(gate, thing)
+      gate.name == :group ? Types::Group.wrap(thing, @group_resolver) : gate.wrap(thing)
+    end
+
+    # Internal: Mirrors a trusted remote expression during adapter sync,
+    # including legacy expressions that predate empty-group validation.
+    #
+    # Returns the result of Adapter#enable.
+    def enable_expression_from_sync(expression)
+      enable_thing(Expression.build(expression), validate_expression: false)
+    end
+
+    def enable_thing(thing, validate_expression:)
+      ensure_not_reserved!
+      instrument(:enable) do |payload|
+        gate = gate_for(thing)
+        wrapped_thing = wrap_for(gate, thing)
+        validate_expression!(wrapped_thing) if validate_expression
+
+        adapter.add self
+
+        payload[:gate_name] = gate.name
+        payload[:thing] = wrapped_thing
+
+        adapter.enable self, gate, wrapped_thing
+      end
+    end
+
+    # Private: Raises if an expression about to be enabled contains empty
+    # Any/All groups. An empty All evaluates to true for every actor, so
+    # persisting one silently enables the feature for everyone.
+    #
+    # Returns the expression.
+    def validate_expression!(expression)
+      if expression.is_a?(Expression) && expression.empty_groups?
+        raise ArgumentError, "#{expression.value.inspect} contains empty Any/All groups and cannot be enabled (an empty All matches every actor, an empty Any matches none). Remove the empty groups or add conditions to them."
+      end
+
+      expression
+    end
+
+    # Private: Wrap the actors passed to enabled? in a single pass to avoid
+    # intermediate array allocations on the hot path. Arrays are flattened one
+    # level; the explicit is_a?(Array) check (instead of flatten) avoids the
+    # to_ary warning that happens when passing a DelegateClass of an
+    # ActiveRecord object. This is tested in
+    # spec/flipper/model/active_record_spec.rb. Nils are dropped to allow the
+    # null object pattern. See https://github.com/flippercloud/flipper/pull/887
+    #
+    # Returns an Array of Types::Actor instances or nil if no actors.
+    def wrap_actors(actors)
+      return nil if actors.empty?
+
+      wrapped = []
+      actors.each do |actor|
+        if actor.is_a?(Array)
+          actor.each do |nested_actor|
+            wrapped << Types::Actor.wrap(nested_actor) unless nested_actor.nil?
+          end
+        elsif !actor.nil?
+          wrapped << Types::Actor.wrap(actor)
+        end
+      end
+      wrapped.empty? ? nil : wrapped
+    end
+
+    # Private: Raises for names reserved for Flipper's own data.
+    def ensure_not_reserved!
+      raise ReservedKeyError.new(key) if Flipper.reserved_key?(key)
+    end
+
     # Private: Instrument a feature operation.
     def instrument(operation, initial_payload = {})
       @instrumenter.instrument(InstrumentationName, initial_payload) do |payload|
+        payload[:feature] = self
         payload[:feature_name] = name
+        # Named instances say which instance the event came from; the
+        # default instance's payload is unchanged.
+        payload[:instance] = @instance_key if @instance_key
         payload[:operation] = operation
         payload[:result] = yield(payload) if block_given?
       end

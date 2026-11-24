@@ -1,7 +1,9 @@
 #!/bin/sh
 #/ Usage: release
 #/
-#/ Package and release the gem to rubyforge.
+#/ Manual fallback for releasing gems locally.
+#/ Prefer pushing a version tag (e.g. git tag v1.4.0 && git push origin v1.4.0)
+#/ to trigger the automated GitHub Actions release workflow.
 #/
 
 set -e

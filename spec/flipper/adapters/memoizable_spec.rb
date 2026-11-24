@@ -10,6 +10,7 @@ RSpec.describe Flipper::Adapters::Memoizable do
   subject { described_class.new(adapter, cache) }
 
   it_should_behave_like 'a flipper adapter'
+  it_should_behave_like 'an adapter that stores its sync version'
 
   describe '#name' do
     it 'is instrumented' do
@@ -132,6 +133,35 @@ RSpec.describe Flipper::Adapters::Memoizable do
 
         instance.get_all
         expect(adapter.count(:get_all)).to be(1)
+      end
+
+      it 'reloads all features after adding or removing a feature' do
+        first = flipper[:first]
+        second = flipper[:second]
+        subject.add(first)
+        subject.get_all
+
+        subject.add(second)
+        expect(subject.get_all.keys).to contain_exactly('first', 'second')
+
+        subject.remove(first)
+        expect(subject.get_all.keys).to eq(['second'])
+      end
+
+      it 'reloads gate values after changing a preloaded feature' do
+        feature = flipper[:stats]
+        gate = feature.gate(:boolean)
+        subject.add(feature)
+        subject.get_all
+
+        subject.enable(feature, gate, Flipper::Types::Boolean.new)
+        expect(subject.get_all.fetch(feature.key)[:boolean]).to eq('true')
+
+        subject.disable(feature, gate, Flipper::Types::Boolean.new)
+        expect(subject.get_all.fetch(feature.key)[:boolean]).to be_nil
+
+        subject.clear(feature)
+        expect(subject.get_all.fetch(feature.key)).to eq(subject.default_config)
       end
 
       it 'returns default_config for unknown feature keys' do

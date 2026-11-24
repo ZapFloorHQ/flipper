@@ -9,8 +9,6 @@ RSpec.describe Flipper::Adapters::DualWrite do
   let(:remote_adapter) do
     Flipper::Adapters::OperationLogger.new Flipper::Adapters::Memory.new
   end
-  let(:local) { Flipper.new(local_adapter) }
-  let(:remote) { Flipper.new(remote_adapter) }
   let(:sync) { Flipper.new(subject) }
 
   subject do
@@ -18,6 +16,13 @@ RSpec.describe Flipper::Adapters::DualWrite do
   end
 
   it_should_behave_like 'a flipper adapter'
+  it_should_behave_like 'an adapter that stores its sync version'
+
+  it 'keeps the sync version in the local adapter only' do
+    subject.sync_version = Flipper::SyncVersion.new("scope", 10)
+    expect(local_adapter.sync_version).to eq(subject.sync_version)
+    expect(remote_adapter.sync_version).to be_nil
+  end
 
   it 'only uses local for #features' do
     subject.features

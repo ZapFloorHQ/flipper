@@ -8,47 +8,71 @@ module Flipper
     class Memory
       include ::Flipper::Adapter
 
+      # Private: Shared frozen config for unknown features. Gate values
+      # returned by get are treated as read-only.
+      DEFAULT_CONFIG = default_config.each_value(&:freeze).freeze
+
       # Public
       def initialize(source = nil, threadsafe: true)
         @source = Typecast.features_hash(source)
         @lock = Mutex.new if threadsafe
-        reset
+        @sync_version = nil
       end
 
-      # Public: The set of known features.
+      # Public
+      def sync_version
+        synchronize { @sync_version }
+      end
+
+      # Public
+      def sync_version=(version)
+        synchronize { @sync_version = version }
+      end
+
+      # Public: The set of known features. It's frozen and reused until a
+      # write, because Strict checks it on every read.
       def features
-        synchronize { @source.keys }.to_set
+        synchronize { @features ||= @source.keys.to_set.freeze }
       end
 
       # Public: Adds a feature to the set of known features.
       def add(feature)
-        synchronize { @source[feature.key] ||= default_config }
+        synchronize do
+          @features = nil
+          @source[feature.key] ||= default_config
+        end
         true
       end
 
       # Public: Removes a feature from the set of known features and clears
       # all the values for the feature.
       def remove(feature)
-        synchronize { @source.delete(feature.key) }
+        synchronize do
+          @features = nil
+          @source.delete(feature.key)
+        end
         true
       end
 
       # Public: Clears all the gate values for a feature.
       def clear(feature)
-        synchronize { @source[feature.key] = default_config }
+        synchronize do
+          @features = nil
+          @source[feature.key] = default_config
+        end
         true
       end
 
       # Public
       def get(feature)
-        synchronize { @source[feature.key] } || default_config
+        synchronize { @source[feature.key] } || DEFAULT_CONFIG
       end
 
       def get_multi(features)
         synchronize do
           result = {}
           features.each do |feature|
-            result[feature.key] = @source[feature.key] || default_config
+            result[feature.key] = @source[feature.key] || DEFAULT_CONFIG
           end
           result
         end
@@ -61,22 +85,25 @@ module Flipper
       # Public
       def enable(feature, gate, thing)
         synchronize do
-          @source[feature.key] ||= default_config
+          # Write a copy, because get hands out the stored hash and its sets.
+          gates = (@source[feature.key] || default_config).dup
 
           case gate.data_type
           when :boolean
-            @source[feature.key] = default_config
-            @source[feature.key][gate.key] = thing.value.to_s
+            gates = default_config
+            gates[gate.key] = thing.value.to_s
           when :integer
-            @source[feature.key][gate.key] = thing.value.to_s
+            gates[gate.key] = thing.value.to_s
           when :set
-            @source[feature.key][gate.key] << thing.value.to_s
+            gates[gate.key] = gates[gate.key] | [thing.value.to_s]
           when :json
-            @source[feature.key][gate.key] = thing.value
+            gates[gate.key] = thing.value
           else
             raise "#{gate} is not supported by this adapter yet"
           end
 
+          @features = nil
+          @source[feature.key] = gates
           true
         end
       end
@@ -84,21 +111,23 @@ module Flipper
       # Public
       def disable(feature, gate, thing)
         synchronize do
-          @source[feature.key] ||= default_config
+          gates = (@source[feature.key] || default_config).dup
 
           case gate.data_type
           when :boolean
-            @source[feature.key] = default_config
+            gates = default_config
           when :integer
-            @source[feature.key][gate.key] = thing.value.to_s
+            gates[gate.key] = thing.value.to_s
           when :set
-            @source[feature.key][gate.key].delete thing.value.to_s
+            gates[gate.key] = gates[gate.key] - [thing.value.to_s]
           when :json
-            @source[feature.key].delete(gate.key)
+            gates.delete(gate.key)
           else
             raise "#{gate} is not supported by this adapter yet"
           end
 
+          @features = nil
+          @source[feature.key] = gates
           true
         end
       end
@@ -112,28 +141,31 @@ module Flipper
         "#<#{self.class.name}:#{object_id} #{attributes.join(', ')}>"
       end
 
-      # Public: a more efficient implementation of import for this adapter
+      # Public: a more efficient implementation of import for this adapter.
+      # Keeps the current flags if the source's are an older sync version.
+      # Otherwise yields the new flags and version inside the lock, before
+      # replacing the current ones.
       def import(source)
         adapter = self.class.from(source)
         get_all = Typecast.features_hash(adapter.get_all)
-        synchronize { @source.replace(get_all) }
+        version = adapter.sync_version
+
+        synchronize do
+          unless version&.older_than?(@sync_version)
+            yield get_all, version if block_given?
+            @features = nil
+            @source.replace(get_all)
+            @sync_version = version if version
+          end
+        end
+
         true
       end
 
       private
 
-      def reset
-        @pid = Process.pid
-        @lock&.unlock if @lock&.locked?
-      end
-
-      def forked?
-        @pid != Process.pid
-      end
-
       def synchronize(&block)
         if @lock
-          reset if forked?
           @lock.synchronize(&block)
         else
           block.call

@@ -1,5 +1,4 @@
 require 'delegate'
-require 'flipper/ui/decorators/gate'
 require 'flipper/ui/util'
 
 module Flipper
@@ -19,11 +18,6 @@ module Flipper
         # configured for Flipper::UI.
         attr_accessor :actor_names
 
-        # Public: Returns name titleized.
-        def pretty_name
-          @pretty_name ||= Util.titleize(name)
-        end
-
         def color_class
           case feature.state
           when :on
@@ -41,11 +35,13 @@ module Flipper
           statuses = []
 
           if feature.actors_value.count > 0
-            statuses << %Q(<span data-toggle="tooltip" data-placement="bottom" title="#{Util.to_sentence(feature.actors_value.to_a)}">) + Util.pluralize(feature.actors_value.count, 'actor', 'actors') + "</span>"
+            title = Rack::Utils.escape_html(Util.to_sentence(feature.actors_value.to_a))
+            statuses << %Q(<span data-toggle="tooltip" data-placement="bottom" title="#{title}">) + Util.pluralize(feature.actors_value.count, 'actor', 'actors') + "</span>"
           end
 
           if feature.groups_value.count > 0
-            statuses << %Q(<span data-toggle="tooltip" data-placement="bottom" title="#{Util.to_sentence(feature.groups_value.to_a)}">) + Util.pluralize(feature.groups_value.count, 'group', 'groups') + "</span>"
+            title = Rack::Utils.escape_html(Util.to_sentence(feature.groups_value.to_a))
+            statuses << %Q(<span data-toggle="tooltip" data-placement="bottom" title="#{title}">) + Util.pluralize(feature.groups_value.count, 'group', 'groups') + "</span>"
           end
 
           if feature.percentage_of_actors_value > 0
@@ -55,6 +51,8 @@ module Flipper
           if feature.percentage_of_time_value > 0
             statuses << "#{feature.percentage_of_time_value}% of time"
           end
+
+          statuses << "an expression" if feature.expression_value
 
           Util.to_sentence(statuses)
         end
@@ -68,10 +66,6 @@ module Flipper
           else
             "Disabled"
           end
-        end
-
-        def pretty_enabled_gate_names
-          enabled_gates.map { |gate| Util.titleize(gate.key) }.sort.join(', ')
         end
 
         StateSortMap = {

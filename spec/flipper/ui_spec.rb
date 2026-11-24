@@ -1,3 +1,5 @@
+require "open3"
+
 RSpec.describe Flipper::UI do
   let(:token) do
     if Rack::Protection::AuthenticityToken.respond_to?(:random_token)
@@ -23,10 +25,30 @@ RSpec.describe Flipper::UI do
   end
 
   describe 'Request method unsupported by action' do
-    it 'raises error' do
-      expect do
-        head '/features'
-      end.to raise_error(Flipper::UI::RequestMethodNotSupported)
+    it 'answers 405 with the methods the route allows' do
+      options '/features'
+      expect(last_response.status).to be(405)
+      expect(last_response.headers['allow']).to eq('HEAD, GET, POST')
+      expect(last_response.body).to eq('Method Not Allowed')
+    end
+
+    it 'answers 405 for PUT on a feature page' do
+      put '/features/search', { 'authenticity_token' => token }, 'rack.session' => session
+      expect(last_response.status).to be(405)
+      expect(last_response.headers['allow']).to eq('HEAD, GET, DELETE')
+    end
+  end
+
+  describe 'Head requests' do
+    let(:app) { build_app(flipper) }
+
+    it 'are allowed but perform get and return no body' do
+      flipper.enable :some_great_feature
+
+      head '/features'
+
+      expect(last_response.status).to be(200)
+      expect(last_response.body).to be_empty
     end
   end
 
@@ -73,6 +95,22 @@ RSpec.describe Flipper::UI do
           get '/features'
           expect(last_response.body).to include('Production Environment')
         end
+
+        it 'prefers the banner given to the app' do
+          app = build_app(flipper, banner_text: 'Cross-app project', banner_class: 'warning')
+          status, _, body = app.call(Rack::MockRequest.env_for('/features'))
+          html = body.each.to_a.join
+
+          expect(status).to be(200)
+          expect(html).to include('Cross-app project')
+          expect(html).to include('alert-warning')
+          expect(html).not_to include('Production Environment')
+        end
+      end
+
+      it 'rejects an unknown banner_class for the app' do
+        expect { build_app(flipper, banner_class: 'nope').call(Rack::MockRequest.env_for('/features')) }.
+          to raise_error(Flipper::InvalidConfigurationValue, /banner_class/)
       end
     end
 
@@ -193,5 +231,18 @@ RSpec.describe Flipper::UI do
         end
       end
     end
+  end
+
+  it "loads rack/session, since the examples and docs tell you to use its cookie middleware" do
+    # A child process so nothing else has loaded it. RUBYLIB finds the bundled gems
+    # (CI installs them outside GEM_HOME) without loading Bundler or Rails. The check
+    # is on the file because Rack 2, which older Rails rows use, defines the constant itself.
+    env = { "RUBYLIB" => $LOAD_PATH.join(File::PATH_SEPARATOR) }
+    script = "require 'flipper/ui'; exit $LOADED_FEATURES.grep(%r{/rack/session\\.rb\\z}).any?"
+    _, stderr, status = Bundler.with_unbundled_env do
+      Open3.capture3(env, RbConfig.ruby, "-Ilib", "-e", script, chdir: FlipperRoot.to_s)
+    end
+
+    expect(status).to be_success, stderr
   end
 end

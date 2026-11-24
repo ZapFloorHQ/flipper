@@ -1,5 +1,5 @@
 module Flipper
-  VERSION = '1.3.6'.freeze
+  VERSION = '1.4.2'.freeze
 
   REQUIRED_RUBY_VERSION = '2.6'.freeze
   NEXT_REQUIRED_RUBY_VERSION = '3.0'.freeze

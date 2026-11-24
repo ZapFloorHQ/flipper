@@ -34,22 +34,18 @@ module Flipper
             end
 
             return if allow_unregistered_groups?
-            return if Flipper.group_exists?(group_name)
+            return if flipper.group_exists?(group_name)
 
             json_error_response(:group_not_registered)
           end
 
           def allow_unregistered_groups?
-            allow_unregistered_groups = params['allow_unregistered_groups']
+            allow_unregistered_groups = string_param('allow_unregistered_groups')
             allow_unregistered_groups && allow_unregistered_groups == 'true'
           end
 
-          def disallow_unregistered_groups?
-            !allow_unregistered_groups?
-          end
-
           def group_name
-            @group_name ||= params['name']
+            @group_name ||= string_param('name')
           end
         end
       end

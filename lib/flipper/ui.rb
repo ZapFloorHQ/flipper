@@ -7,6 +7,7 @@ rescue LoadError
   require 'rack/methodoverride'
 end
 require 'rack/protection'
+require 'rack/session'
 
 require 'flipper'
 require 'flipper/ui/middleware'
@@ -29,6 +30,7 @@ module Flipper
       app = ->(_) { [200, { Rack::CONTENT_TYPE => 'text/html' }, ['']] }
       builder = Rack::Builder.new
       yield builder if block_given?
+      builder.use Rack::Head
 
       # Only use Rack::Protection::AuthenticityToken if no other options are
       # provided. Should avoid some pain for some people. If any options are
@@ -42,7 +44,8 @@ module Flipper
 
       builder.use Rack::MethodOverride
       builder.use Flipper::Middleware::SetupEnv, flipper, env_key: env_key
-      builder.use Flipper::UI::Middleware, flipper: flipper, env_key: env_key
+      builder.use Flipper::UI::Middleware, flipper: flipper, env_key: env_key,
+        banner_text: options[:banner_text], banner_class: options[:banner_class]
       builder.run app
       klass = self
       app = builder.to_app

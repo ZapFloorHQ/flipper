@@ -21,6 +21,7 @@ module Flipper
         @memoize = false
         @features_key = :flipper_features
         @get_all_key = :all_memoized
+        @cache_key_by_feature_key = Hash.new { |hash, key| hash[key] = "feature/#{key}".freeze }
       end
 
       # Public
@@ -53,7 +54,9 @@ module Flipper
       # Public
       def get(feature)
         if memoizing?
-          cache.fetch(key_for(feature.key)) { cache[key_for(feature.key)] = @adapter.get(feature) }
+          cache.fetch(key_for(feature.key)) do
+            cache[key_for(feature.key)] = preloaded_missing?(feature) ? default_config : @adapter.get(feature)
+          end
         else
           @adapter.get(feature)
         end
@@ -62,7 +65,10 @@ module Flipper
       # Public
       def get_multi(features)
         if memoizing?
-          uncached_features = features.reject { |feature| cache[key_for(feature.key)] }
+          uncached_features = features.reject do |feature|
+            cache[key_for(feature.key)] ||= default_config if preloaded_missing?(feature)
+            cache[key_for(feature.key)]
+          end
 
           if uncached_features.any?
             response = @adapter.get_multi(uncached_features)
@@ -155,16 +161,26 @@ module Flipper
 
       private
 
+      def preloaded_missing?(feature)
+        cache[@get_all_key] && cache[@features_key] && !cache[@features_key].include?(feature.key)
+      end
+
       def key_for(key)
-        "feature/#{key}"
+        @cache_key_by_feature_key[key]
       end
 
       def expire_feature(feature)
-        cache.delete(key_for(feature.key)) if memoizing?
+        if memoizing?
+          cache.delete(key_for(feature.key))
+          cache.delete(@get_all_key)
+        end
       end
 
       def expire_features_set
-        cache.delete(@features_key) if memoizing?
+        if memoizing?
+          cache.delete(@features_key)
+          cache.delete(@get_all_key)
+        end
       end
     end
   end

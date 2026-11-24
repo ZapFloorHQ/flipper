@@ -29,6 +29,7 @@ module Flipper
       extend Forwardable
 
       VALID_REQUEST_METHOD_NAMES = Set.new([
+                                             'head'.freeze,
                                              'get'.freeze,
                                              'post'.freeze,
                                              'put'.freeze,
@@ -103,31 +104,31 @@ module Flipper
         @headers = {Rack::CONTENT_TYPE => 'text/plain'}
       end
 
+      # Public: The banner text for this UI. An app built with
+      # Flipper::UI.app(flipper, banner_text: "...") uses its own, so two UIs
+      # (say, the default and a named instance) can be told apart.
+      def banner_text
+        request.env.fetch(Middleware::BANNER_ENV_KEY, {}).fetch(:text) { Flipper::UI.configuration.banner_text }
+      end
+
+      # Public: The banner's Bootstrap alert class for this UI.
+      def banner_class
+        request.env.fetch(Middleware::BANNER_ENV_KEY, {}).fetch(:class) { Flipper::UI.configuration.banner_class }
+      end
+
       # Public: Runs the request method for the provided request.
       #
       # Returns whatever the request method returns in the action.
       def run
-        if valid_request_method? && respond_to?(request_method_name)
-          catch(:halt) { send(request_method_name) }
-        else
-          raise UI::RequestMethodNotSupported,
-                "#{self.class} does not support request method #{request_method_name.inspect}"
-        end
-      end
+        catch(:halt) do
+          method_not_allowed unless valid_request_method? && respond_to?(request_method_name)
 
-      # Public: Runs another action from within the request method of a
-      # different action.
-      #
-      # action_class - The class of the other action to run.
-      #
-      # Examples
-      #
-      #   run_other_action Home
-      #   # => result of running Home action
-      #
-      # Returns result of other action.
-      def run_other_action(action_class)
-        action_class.new(flipper, request).run
+          begin
+            send(request_method_name)
+          rescue ReservedKeyError => error
+            redirect_to("/features/#{Util.escape error.key}?error=#{Util.escape reserved_name_error(error.key)}")
+          end
+        end
       end
 
       # Public: Call this with a response to immediately stop the current action
@@ -191,19 +192,6 @@ module Flipper
         @headers[name] = value
       end
 
-      class Breadcrumb
-        attr_reader :text, :href
-
-        def initialize(text, href = nil)
-          @text = text
-          @href = href
-        end
-
-        def active?
-          @href.nil?
-        end
-      end
-
       # Private
       def view_with_layout(&block)
         view :layout, &block
@@ -219,7 +207,8 @@ module Flipper
         path = views_path.join("#{name}.erb")
         raise "Template does not exist: #{path}" unless path.exist?
 
-        eval(Erubi::Engine.new(path.read, escape: true).src)
+        # Views are UTF-8 (layout.erb has "‹"), whatever Ruby's default encoding is.
+        eval(Erubi::Engine.new(path.read(encoding: Encoding::UTF_8), escape: true).src)
       end
 
       # Internal: The path the app is mounted at.
@@ -249,7 +238,24 @@ module Flipper
 
       # Private: Returns the request method converted to an action method.
       def request_method_name
-        @request_method_name ||= @request.request_method.downcase
+        @request_method_name ||= action_method_name(@request.request_method.downcase)
+      end
+
+      # Private: The action method that answers a request method. HEAD is
+      # answered by get.
+      def action_method_name(name)
+        name == "head" ? "get" : name
+      end
+
+      # Private: Responds 405 with an Allow header listing the methods this
+      # action answers.
+      def method_not_allowed
+        allowed = VALID_REQUEST_METHOD_NAMES.select do |name|
+          respond_to?(action_method_name(name))
+        end
+        status 405
+        header 'allow', allowed.map(&:upcase).join(', ')
+        halt [@code, @headers, ['Method Not Allowed']]
       end
 
       def csrf_input_tag
@@ -273,6 +279,11 @@ module Flipper
 
       def write_allowed?
         !read_only?
+      end
+
+      # Internal: The error shown for a feature name reserved for Flipper.
+      def reserved_name_error(key)
+        "#{key.inspect} is reserved for Flipper's internal use."
       end
 
       def bootstrap_css
