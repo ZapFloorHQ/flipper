@@ -184,7 +184,10 @@ RSpec.describe Flipper::UI::Actions::Feature do
       it 'renders template with custom actor names' do
         get '/features/search'
         expect(last_response.body).to include('Some Actor Name (some_actor_name)')
-        expect(last_response.body).not_to include('Some Other Actor Name')
+        # ZapFloor fork: the Add Actor autocomplete <datalist> intentionally lists every known actor name (not just the
+        # ones enabled on this feature), so exclude it before asserting non-enabled names are absent from the page.
+        body_without_actor_datalist = last_response.body.gsub(%r{<datalist id="actors-list">.*?</datalist>}m, '')
+        expect(body_without_actor_datalist).not_to include('Some Other Actor Name')
       end
 
       it 'allows basic html' do

@@ -57,7 +57,7 @@
                     <input type="text" name="value" placeholder="<%= Flipper::UI.configuration.add_actor_placeholder %>" class="form-control" list="actors-list">
                     <datalist id="actors-list">
                       <% @feature.actor_names.each_pair do |value, name| %>
-                        <option value="<%= value %>"><%= name %></option>
+                        <option value="<%= value %>"><%== Sanitize.fragment(name.to_s, Sanitize::Config::BASIC) %></option>
                       <% end %>
                     </datalist>
                   </div>
